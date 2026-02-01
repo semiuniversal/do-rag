@@ -246,7 +246,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 1  # Reduced to 1. Safety first: Serialization guarantees we never exceed context windows.
+        batch_size = 5  # Increased to 5. Safe with 8k model (5k chars < 8k tokens) and loop logic fix.
         documents_batch = []
         ids_batch = []
         
