@@ -306,6 +306,10 @@ def main():
                     # Batch processed - Moved INSIDE loop to strictly enforce limit
                     if len(documents_batch) >= batch_size:
                         try:
+                            # DEBUG: Inspect the batch before it hits the model
+                            max_chunk_len = max([len(d.page_content) for d in documents_batch]) if documents_batch else 0
+                            logging.info(f"Adding batch of {len(documents_batch)} chunks. Max chunk length: {max_chunk_len} chars.")
+                            
                             vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
                             
                             # For immediate consistency, we can update state or wait. 
