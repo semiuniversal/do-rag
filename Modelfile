@@ -1,0 +1,3 @@
+FROM nomic-embed-text
+PARAMETER num_ctx 8192
+PARAMETER num_batch 8192

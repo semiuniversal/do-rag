@@ -18,19 +18,24 @@ Features:
 
 ## Installation
 
-1.  Clone this repository.
-2.  Install dependencies:
+1.  **Clone the repository** (or copy files).
+2.  **Install dependencies**:
     ```bash
     uv sync
     ```
+3.  **Setup the Custom Model**:
+    This project requires a custom Ollama model configuration to handle large batches.
+    ```bash
+    bash setup_model.sh
+    ```
+    *This creates a `nomic-rag` model in Ollama with an 8192 token window.*
 
-## Configuration
-
-1.  Copy `config.example.py` to `config.py`:
+4.  **Configure Paths**:
+    Copy `config.example.py` to `config.py` and edit it to point to your document folders.
     ```bash
     cp config.example.py config.py
+    # Edit config.py with your preferred editor
     ```
-2.  Edit `config.py` to set your document paths:
 
 ```python
 DOCUMENT_DIRECTORIES = [

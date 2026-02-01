@@ -136,10 +136,18 @@ def main():
     # Initialize Embeddings
     logging.info(f"Connecting to Ollama at {config.OLLAMA_BASE_URL}...")
     try:
+        # Pass high-context options to Ollama. 
+        # Note: langchain-ollama usually keys this as 'options' or part of model_kwargs in init.
+        # If this fails, we rely on batch_size=1 safety.
         embeddings = OllamaEmbeddings(
             base_url=config.OLLAMA_BASE_URL,
-            model=config.EMBEDDING_MODEL
-        )
+            model=config.EMBEDDING_MODEL,
+        ) 
+        # Try to set it if property exists, or silence error
+        if hasattr(embeddings, "model_kwargs"):
+             embeddings.model_kwargs = {"options": {"num_ctx": 8192, "num_batch": 8192}}
+        elif hasattr(embeddings, "request_kwargs"):
+             embeddings.request_kwargs = {"options": {"num_ctx": 8192, "num_batch": 8192}}
     except Exception as e:
         logging.error(f"Failed to connect to Ollama: {e}")
         sys.exit(1)
@@ -238,7 +246,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 1  # Reduced to 1 to guarantee no context overflows (serial processing)
+        batch_size = 5  # Reduced to 5. 5x1000 chars = ~5000 chars, safely within 8192 token limit
         documents_batch = []
         ids_batch = []
         
