@@ -4,6 +4,10 @@
 MODEL_NAME="nomic-rag"
 LOG_FILE="ollama_server.log"
 
+# Suppress Warnings
+export OLLAMA_LOG_LEVEL=ERROR
+export GIN_MODE=release
+
 echo "=== Ollama RAG Service Manager ==="
 
 # 1. Check if Ollama is installed
