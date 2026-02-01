@@ -238,7 +238,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 5  # Reduced to 5 to avoid Ollama context overflow errors
+        batch_size = 1  # Reduced to 1 to guarantee no context overflows (serial processing)
         documents_batch = []
         ids_batch = []
         
