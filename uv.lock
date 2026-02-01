@@ -639,6 +639,7 @@ dependencies = [
     { name = "python-docx" },
     { name = "python-dotenv" },
     { name = "tqdm" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -654,6 +655,7 @@ requires-dist = [
     { name = "python-docx", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "tqdm", specifier = ">=4.67.2" },
+    { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 
 [[package]]

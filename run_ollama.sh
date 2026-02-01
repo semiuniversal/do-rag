@@ -2,70 +2,140 @@
 
 # Configuration
 MODEL_NAME="nomic-rag"
+BASE_MODEL="nomic-embed-text"
 LOG_FILE="ollama_server.log"
+PID_FILE="ollama.pid"
 
 # Suppress Warnings
 export OLLAMA_LOG_LEVEL=ERROR
+export OLLAMA_DEBUG=0
 export GIN_MODE=release
 
-echo "=== Ollama RAG Service Manager ==="
+check_ready() {
+    RETRIES=0
+    MAX_RETRIES=30
+    echo -n "Waiting for API..."
+    while ! curl -s http://localhost:11434/api/tags > /dev/null; do
+        sleep 1
+        echo -n "."
+        RETRIES=$((RETRIES+1))
+        if [ $RETRIES -ge $MAX_RETRIES ]; then
+            echo " Timeout!"
+            return 1
+        fi
+    done
+    echo " Ready."
+    return 0
+}
 
-# 1. Check if Ollama is installed
-if ! command -v ollama &> /dev/null; then
-    echo "Error: 'ollama' command not found. Please install Ollama first."
-    exit 1
-fi
-
-# 2. Start Ollama Server in Background
-echo "Starting Ollama server..."
-echo "Logs are being saved to: $LOG_FILE"
-# Clear log file on startup
-> "$LOG_FILE"
-ollama serve > >(tee -a "$LOG_FILE") 2>&1 &
-SERVER_PID=$!
-
-# Ensure we kill the server when this script exits
-trap "kill $SERVER_PID" EXIT
-
-# 3. Wait for Server to be Ready
-echo "Waiting for Ollama API to be ready..."
-RETRIES=0
-MAX_RETRIES=30
-while ! curl -s http://localhost:11434/api/tags > /dev/null; do
-    sleep 1
-    RETRIES=$((RETRIES+1))
-    if [ $RETRIES -ge $MAX_RETRIES ]; then
-        echo "Error: Timed out waiting for Ollama server."
-        exit 1
-    fi
-done
-echo "Ollama server is up."
-
-# 4. Check Base Model Dependency
-BASE_MODEL="nomic-embed-text"
-if ollama list | grep -q "$BASE_MODEL"; then
-    echo "Base model '$BASE_MODEL' found."
-else
-    echo "Base model '$BASE_MODEL' NOT found. Pulling it now..."
-    ollama pull "$BASE_MODEL"
-fi
-
-# 5. Check/Create Custom Model
-if ollama list | grep -q "$MODEL_NAME"; then
-    echo "Model '$MODEL_NAME' already exists. Good."
-else
-    echo "Model '$MODEL_NAME' not found. Creating from Modelfile..."
-    if [ -f Modelfile ]; then
-        ollama create "$MODEL_NAME" -f Modelfile
-        echo "Model created successfully."
+check_models() {
+    # Check Base Model
+    if ollama list | grep -q "$BASE_MODEL"; then
+        echo "Base model '$BASE_MODEL' found."
     else
-        echo "Error: Modelfile not found in current directory!"
+        echo "Base model '$BASE_MODEL' NOT found. Pulling..."
+        ollama pull "$BASE_MODEL"
+    fi
+
+    # Check Custom Model
+    if ollama list | grep -q "$MODEL_NAME"; then
+        echo "Model '$MODEL_NAME' ready."
+    else
+        echo "Model '$MODEL_NAME' missing. Creating..."
+        if [ -f Modelfile ]; then
+            ollama create "$MODEL_NAME" -f Modelfile
+        else
+            echo "Error: Modelfile not found!"
+            return 1
+        fi
+    fi
+}
+
+start_server() {
+    if [ -f "$PID_FILE" ]; then
+        if kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+            echo "Ollama is already running (PID $(cat $PID_FILE))."
+            return
+        else
+            echo "Removing stale PID file."
+            rm "$PID_FILE"
+        fi
+    fi
+
+    echo "Starting Ollama server..."
+    # Clear log on start
+    > "$LOG_FILE"
+    
+    # Start with nohup correctly detaching stdin/stdout/stderr
+    nohup ollama serve > "$LOG_FILE" 2>&1 < /dev/null &
+    PID=$!
+    echo $PID > "$PID_FILE"
+    
+    echo "Server started with PID $PID. Logs at $LOG_FILE"
+    
+    if check_ready; then
+        check_models
+        echo "=== Service Running ==="
+        echo "Ollama is running in the background."
+        echo "Use './run_ollama.sh stop' to stop it."
+        echo "Use 'tail -f $LOG_FILE' to watch logs."
+    else
+        echo "Failed to start server."
+        cat "$LOG_FILE"
+        kill $PID 2>/dev/null
+        rm "$PID_FILE"
         exit 1
     fi
-fi
+}
 
-# 5. Monitor Logs
-echo "=== Service Running ==="
-echo "Press Ctrl+C to stop the server."
-echo "Tailing logs:"
-tail -f "$LOG_FILE" --pid=$SERVER_PID
+stop_server() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        echo "Stopping Ollama (PID $PID)..."
+        kill $PID 2>/dev/null
+        rm "$PID_FILE"
+        echo "Stopped."
+    else
+        echo "No PID file found. Is it running?"
+    fi
+}
+
+status_server() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if kill -0 $PID 2>/dev/null; then
+            echo "Ollama is RUNNING (PID $PID)"
+        else
+            echo "Ollama is NOT RUNNING (Stale PID file)"
+        fi
+    else
+        echo "Ollama is NOT RUNNING"
+    fi
+}
+
+# Main CLI dispatch
+case "$1" in
+    start)
+        start_server
+        ;;
+    stop)
+        stop_server
+        ;;
+    restart)
+        stop_server
+        sleep 2
+        start_server
+        ;;
+    status)
+        status_server
+        ;;
+    *)
+        # Default behavior: Start if not running, or just show status
+        if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+            echo "Ollama is already running."
+            status_server
+        else
+            start_server
+        fi
+        ;;
+esac

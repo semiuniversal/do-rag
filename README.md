@@ -24,11 +24,16 @@ Features:
     uv sync
     ```
 3.  **Start the Ollama Service**:
-    Use the provided script to start the server (it handles custom model creation and logging automatically).
+    Use the service manager to start Ollama in the background.
     ```bash
-    bash run_ollama.sh
+    ./run_ollama.sh start
     ```
-    *This creates the `nomic-rag` model if missing and logs output to `ollama_server.log`.*
+    - `start`: Starts service (background).
+    - `stop`: Stops service.
+    - `status`: Checks if running.
+    - `restart`: Restarts service and truncates logs.
+    
+    *Logs are saved to `ollama_server.log`.*
 
 4.  **Configure Paths**:
     Copy `config.example.py` to `config.py` and edit it to point to your document folders.
@@ -69,35 +74,45 @@ uv run search_docs.py "your search query"
 
 This system provides an MCP server that exposes a `search_documents` tool.
 
-#### Running Locally (WSL/Linux)
+#### Running the Service
+Use the background service script (logs saved to `mcp_server.log`):
+
 ```bash
-uv run server.py
+./run_mcp_server.sh start
 ```
+*Endpoint: `http://localhost:8000/sse`*
 
-#### Connecting from LM Studio (Windows) to WSL
+#### Connecting from LM Studio
+#### Connecting from LM Studio (v0.4.x)
+1.  In the **Developer** tab, click the **MCP.json** button at the top (embedded editor).
+2.  Paste this SSE configuration:
 
-If you are running LM Studio on Windows and this project in WSL, configure your MCP server in LM Studio with the following settings to bridge the connection:
-
-**Command**: `wsl.exe`
-**Args**:
-- `-e`
-- `bash`
-- `-c`
-- `cd /absolute/path/to/do-rag && uv run server.py`
-
-*Replace `/absolute/path/to/do-rag` with the full path to this directory in WSL.*
-
-**Example JSON Config:**
 ```json
 {
   "local-rag": {
-    "command": "wsl.exe",
-    "args": [
-      "-e",
-      "bash",
-      "-c",
-      "cd /mnt/c/Users/wtrem/Projects/do-rag && uv run server.py"
-    ]
+    "type": "sse",
+    "url": "http://localhost:8000/sse"
   }
 }
 ```
+
+```json
+{
+  "local-rag": {
+    "type": "sse",
+    "url": "http://localhost:8000/sse"
+  }
+}
+```
+
+```json
+{
+  "local-rag": {
+    "type": "sse",
+    "url": "http://localhost:8000/sse"
+  }
+}
+```
+*(Make sure to remove any old "command": "wsl.exe" entries)*
+
+*Note: You can still run it manually with `uv run server.py`, but the background service is recommended for logs and stability.*

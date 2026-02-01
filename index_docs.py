@@ -58,6 +58,24 @@ def save_state(state: Dict[str, Dict[str, Any]]):
 
 def get_files_to_index(directories: List[str], extensions: List[str]) -> List[Path]:
     """Recursively find all files with matching extensions in given directories."""
+
+def add_documents_with_retry(vectorstore, documents, ids, max_retries=3, initial_delay=0.5):
+    """
+    Attempt to add documents with retries to handle transient Ollama crashes (500 EOF).
+    Exponential backoff: 0.5 -> 1.0 -> 2.0
+    """
+    for attempt in range(max_retries):
+        try:
+            vectorstore.add_documents(documents=documents, ids=ids)
+            return True
+        except Exception as e:
+            wait_time = initial_delay * (2 ** attempt)
+            logging.warning(f"Batch failed (Attempt {attempt+1}/{max_retries}). Retrying in {wait_time}s. Error: {e}")
+            time.sleep(wait_time)
+            
+    # Final attempt failed
+    logging.error(f"Failed to add batch after {max_retries} attempts.")
+    return False
     files = []
     print("Scanning directories...", file=sys.stderr)
     
@@ -131,6 +149,7 @@ def read_file_content(file_path: Path) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Index local documents for RAG")
     parser.add_argument("--reset", action="store_true", help="Reset validation database before indexing")
+    parser.add_argument("--force", action="store_true", help="Force reset without confirmation (only with --reset)")
     args = parser.parse_args()
 
     # Initialize Embeddings
@@ -142,7 +161,7 @@ def main():
         embeddings = OllamaEmbeddings(
             base_url=config.OLLAMA_BASE_URL,
             model=config.EMBEDDING_MODEL,
-        ) 
+        )
         # Try to set it if property exists, or silence error
         if hasattr(embeddings, "model_kwargs"):
              embeddings.model_kwargs = {"options": {"num_ctx": 8192, "num_batch": 8192}}
@@ -155,6 +174,14 @@ def main():
     # Initialize Vector Store
     persist_dir = config.CHROMA_PERSIST_DIRECTORY
     if args.reset:
+        if not args.force:
+            print(f"\n⚠️  WARNING: You are about to ERASE the entire index at: {persist_dir}")
+            print("This action cannot be undone.")
+            confirm = input("Are you sure you want to continue? [y/N]: ")
+            if confirm.lower() != 'y':
+                logging.info("Reset cancelled by user.")
+                sys.exit(0)
+
         if os.path.exists(persist_dir):
             import shutil
             logging.warning(f"Resetting database at {persist_dir}")
@@ -209,6 +236,7 @@ def main():
             files_seen.add(str_path)
             
             try:
+                logging.info(f"Processing file: {file_path.name}")
                 mtime = os.path.getmtime(file_path)
                 
                 # Check if new or modified
@@ -246,7 +274,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 1  # Reduced to 1. Model clamped to 2048 context, so even 5 chunks (2500+ tokens) can overflow.
+        batch_size = 1  # Reverted to 1. Stability > Speed. Any batching causes occasional crashes.
         documents_batch = []
         ids_batch = []
         
@@ -310,17 +338,23 @@ def main():
                             max_chunk_len = max([len(d.page_content) for d in documents_batch]) if documents_batch else 0
                             logging.info(f"Adding batch of {len(documents_batch)} chunks. Max chunk length: {max_chunk_len} chars.")
                             
-                            vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
+                            success = add_documents_with_retry(vectorstore, documents_batch, ids_batch)
                             
-                            # For immediate consistency, we can update state or wait. 
-                            # Updating state per-batch is complex because 'file_chunk_map' is per-file.
-                            # So we just flush the vectorstore here.
+                            # Thermal Throttling: Sleep to let CPU/GPU cool down
+                            if hasattr(config, 'INDEXING_COOLDOWN') and config.INDEXING_COOLDOWN > 0:
+                                time.sleep(config.INDEXING_COOLDOWN)
                             
-                            # Reset batches
-                            documents_batch = []
-                            ids_batch = []
+                            if not success:
+                                logging.error(f"CRITICAL: Data lost for {len(documents_batch)} chunks due to persistent errors.")
+
                         except Exception as e:
-                            logging.error(f"Error adding batch of {batch_size} docs: {e}")
+                            # This catches errors OUTSIDE the add_documents call (logic errors), 
+                            # or if add_documents_with_retry itself raised an unexpected exception not caught inside.
+                            logging.error(f"Unexpected error processing batch: {e}")
+                            
+                        # Reset batches ALWAYS, even on error, to prevent infinite growth loop
+                        documents_batch = []
+                        ids_batch = []
 
                 file_chunk_map[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
 
@@ -330,10 +364,19 @@ def main():
         # Process remaining batch
         if documents_batch:
             try:
-                vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
-                for fpath, data in file_chunk_map.items():
-                    state[fpath] = data
-                save_state(state)
+                success = add_documents_with_retry(vectorstore, documents_batch, ids_batch)
+                
+                # Thermal Throttling
+                if hasattr(config, 'INDEXING_COOLDOWN') and config.INDEXING_COOLDOWN > 0:
+                    time.sleep(config.INDEXING_COOLDOWN)
+
+                if success:
+                    for fpath, data in file_chunk_map.items():
+                        state[fpath] = data
+                    save_state(state)
+                else:
+                     logging.error(f"CRITICAL: Failed to save final batch. State not updated for these files.")
+
             except Exception as e:
                 logging.error(f"Error adding final batch: {e}")
         

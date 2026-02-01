@@ -14,5 +14,5 @@ test_docs_incremental/
 dist/
 build/
 chroma.sqlite3
-indexing.pid
-ollama_server.log
+*.log
+*.pid
