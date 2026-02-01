@@ -246,7 +246,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 5  # Reduced to 5. 5x1000 chars = ~5000 chars, safely within 8192 token limit
+        batch_size = 1  # Reduced to 1. Safety first: Serialization guarantees we never exceed context windows.
         documents_batch = []
         ids_batch = []
         
@@ -302,26 +302,24 @@ def main():
                     documents_batch.append(chunk)
                     ids_batch.append(chunk_id)
                     file_new_ids.append(chunk_id)
-    
+
+                    # Batch processed - Moved INSIDE loop to strictly enforce limit
+                    if len(documents_batch) >= batch_size:
+                        try:
+                            vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
+                            
+                            # For immediate consistency, we can update state or wait. 
+                            # Updating state per-batch is complex because 'file_chunk_map' is per-file.
+                            # So we just flush the vectorstore here.
+                            
+                            # Reset batches
+                            documents_batch = []
+                            ids_batch = []
+                        except Exception as e:
+                            logging.error(f"Error adding batch of {batch_size} docs: {e}")
+
                 file_chunk_map[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
-    
-                # Batch processed
-                if len(documents_batch) >= batch_size:
-                    try:
-                        vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
-                        
-                        # Update state for files that were successfully committed
-                        for fpath, data in file_chunk_map.items():
-                            state[fpath] = data
-                        save_state(state)
-                    except Exception as e:
-                        logging.error(f"Error adding batch of {len(documents_batch)} docs: {e}")
-                        # Optional: Could implement retry logic or per-item fallback here
-                    
-                    documents_batch = []
-                    ids_batch = []
-                    file_chunk_map = {}
-                    
+
             except Exception as e:
                 logging.error(f"Error processing {file_path}: {e}")
     
