@@ -210,15 +210,16 @@ def main():
         separators=["\n\n", "\n", ". ", " ", ""]
     )
 
-    batch_size = 100
+    batch_size = 20  # Reduced from 100 to avoid SQLite limits
     documents_batch = []
     ids_batch = []
-    metadata_batch = [] # Store tuple of (filepath, mtime, chunk_ids_for_this_file) to update state after batch
     
     # Create a mapping to easily update state after batch commit
     file_chunk_map = {} # filepath -> [new_chunk_ids]
 
     logging.info("Starting indexing process...")
+    
+    import hashlib
     
     pbar = tqdm(files_to_process, desc="Indexing")
     for i, file_path in enumerate(pbar):
@@ -256,10 +257,11 @@ def main():
             file_new_ids = []
             for j, chunk in enumerate(chunks):
                 chunk.metadata["chunk_index"] = j
-                # Deterministic ID based on content hash or path+index would be ideal, 
-                # but path+index+mtime ensures uniqueness on updates if we didn't delete first.
-                # Since we delete first, path+index is fine, but let's make it robust.
-                chunk_id = f"{file_path.name}_{current_mtime}_{j}"
+                
+                # Robust deterministic ID generation
+                # Hash path + mtime + index to ensure uniqueness and validity
+                id_str = f"{str_path}_{current_mtime}_{j}"
+                chunk_id = hashlib.md5(id_str.encode()).hexdigest()
                 
                 documents_batch.append(chunk)
                 ids_batch.append(chunk_id)
@@ -269,12 +271,16 @@ def main():
 
             # Batch processed
             if len(documents_batch) >= batch_size:
-                vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
-                
-                # Update state for files that were successfully committed
-                for fpath, data in file_chunk_map.items():
-                    state[fpath] = data
-                save_state(state)
+                try:
+                    vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
+                    
+                    # Update state for files that were successfully committed
+                    for fpath, data in file_chunk_map.items():
+                        state[fpath] = data
+                    save_state(state)
+                except Exception as e:
+                    logging.error(f"Error adding batch of {len(documents_batch)} docs: {e}")
+                    # Optional: Could implement retry logic or per-item fallback here
                 
                 documents_batch = []
                 ids_batch = []
@@ -285,10 +291,13 @@ def main():
 
     # Process remaining batch
     if documents_batch:
-        vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
-        for fpath, data in file_chunk_map.items():
-            state[fpath] = data
-        save_state(state)
+        try:
+            vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
+            for fpath, data in file_chunk_map.items():
+                state[fpath] = data
+            save_state(state)
+        except Exception as e:
+            logging.error(f"Error adding final batch: {e}")
     
     logging.info("Indexing complete.")
 
