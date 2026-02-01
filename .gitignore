@@ -14,3 +14,4 @@ test_docs_incremental/
 dist/
 build/
 chroma.sqlite3
+indexing.pid

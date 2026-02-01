@@ -160,146 +160,175 @@ def main():
     # Load state
     state = load_state()
     
-    # Find Files
-    current_files = get_files_to_index(config.DOCUMENT_DIRECTORIES, config.SUPPORTED_EXTENSIONS)
-    logging.info(f"Found {len(current_files)} files to scan")
-
-    # Detect changes
-    files_to_process = []
-    files_seen = set()
-
-    for file_path in current_files:
-        str_path = str(file_path)
-        files_seen.add(str_path)
-        
+    # PID Lock File to prevent concurrent runs
+    lock_file = Path("indexing.pid")
+    if lock_file.exists():
         try:
-            mtime = os.path.getmtime(file_path)
+            old_pid = int(lock_file.read_text().strip())
+            # Check if process is actually running
+            try:
+                os.kill(old_pid, 0)
+                logging.error(f"Another indexer is running (PID {old_pid}). Exiting.")
+                print(f"Error: Another indexer is running (PID {old_pid}). Please stop it or delete 'indexing.pid'.", file=sys.stderr)
+                sys.exit(1)
+            except OSError:
+                logging.warning(f"Stale lock file found (PID {old_pid}). Taking over.")
+        except Exception:
+            logging.warning("Invalid lock file found. Taking over.")
             
-            # Check if new or modified
-            if str_path not in state or state[str_path].get("mtime") != mtime:
-                files_to_process.append(file_path)
-        except OSError:
-            logging.warning(f"Could not access {file_path}")
+    # Write current PID
+    try:
+        lock_file.write_text(str(os.getpid()))
+    except Exception as e:
+        logging.error(f"Could not write lock file: {e}")
+        sys.exit(1)
 
-    # Detect deletions
-    files_to_delete = [f for f in state.keys() if f not in files_seen]
-
-    logging.info(f"Processing plan: {len(files_to_process)} to index/update, {len(files_to_delete)} to delete")
-
-    if not files_to_process and not files_to_delete:
-        logging.info("No changes detected. Index is up to date.")
-        return
-
-    # Process Deletions
-    if files_to_delete:
-        logging.info(f"Removing {len(files_to_delete)} deleted files from index...")
-        for file_path in files_to_delete:
-            chunk_ids = state[file_path].get("chunk_ids", [])
-            if chunk_ids:
-                try:
-                    vectorstore.delete(ids=chunk_ids)
-                except Exception as e:
-                    logging.error(f"Error deleting chunks for {file_path}: {e}")
-            del state[file_path]
-        save_state(state)
-
-    # Process Updates/Additions
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=config.CHUNK_SIZE,
-        chunk_overlap=config.CHUNK_OVERLAP,
-        separators=["\n\n", "\n", ". ", " ", ""]
-    )
-
-    batch_size = 20  # Reduced from 100 to avoid SQLite limits
-    documents_batch = []
-    ids_batch = []
+    try:
+        # Find Files
+        current_files = get_files_to_index(config.DOCUMENT_DIRECTORIES, config.SUPPORTED_EXTENSIONS)
+        logging.info(f"Found {len(current_files)} files to scan")
     
-    # Create a mapping to easily update state after batch commit
-    file_chunk_map = {} # filepath -> [new_chunk_ids]
-
-    logging.info("Starting indexing process...")
+        # Detect changes
+        files_to_process = []
+        files_seen = set()
     
-    import hashlib
-    
-    pbar = tqdm(files_to_process, desc="Indexing")
-    for i, file_path in enumerate(pbar):
-        # Update progress bar with current file name (truncated if long)
-        pbar.set_postfix(file=file_path.name[-30:])
-        
-        str_path = str(file_path)
-        content = read_file_content(file_path)
-        
-        # If existing file is being updated, remove old chunks first
-        if str_path in state:
-            old_ids = state[str_path].get("chunk_ids", [])
-            if old_ids:
-                try:
-                    vectorstore.delete(ids=old_ids)
-                except Exception as e:
-                    logging.error(f"Error cleaning up old chunks for {str_path}: {e}")
-
-        if not content or len(content.strip()) == 0:
-            # Update state to track we saw it even if empty, so we don't re-process endlessly
-            state[str_path] = {"mtime": os.path.getmtime(file_path), "chunk_ids": []}
-            continue
+        for file_path in current_files:
+            str_path = str(file_path)
+            files_seen.add(str_path)
             
-        try:
-            current_mtime = os.path.getmtime(file_path)
-            chunks = text_splitter.create_documents(
-                [content], 
-                metadatas=[{
-                    "source": str_path,
-                    "filename": file_path.name,
-                    "file_modified": time.ctime(current_mtime)
-                }]
-            )
-            
-            file_new_ids = []
-            for j, chunk in enumerate(chunks):
-                chunk.metadata["chunk_index"] = j
+            try:
+                mtime = os.path.getmtime(file_path)
                 
-                # Robust deterministic ID generation
-                # Hash path + mtime + index to ensure uniqueness and validity
-                id_str = f"{str_path}_{current_mtime}_{j}"
-                chunk_id = hashlib.md5(id_str.encode()).hexdigest()
-                
-                documents_batch.append(chunk)
-                ids_batch.append(chunk_id)
-                file_new_ids.append(chunk_id)
-
-            file_chunk_map[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
-
-            # Batch processed
-            if len(documents_batch) >= batch_size:
-                try:
-                    vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
-                    
-                    # Update state for files that were successfully committed
-                    for fpath, data in file_chunk_map.items():
-                        state[fpath] = data
-                    save_state(state)
-                except Exception as e:
-                    logging.error(f"Error adding batch of {len(documents_batch)} docs: {e}")
-                    # Optional: Could implement retry logic or per-item fallback here
-                
-                documents_batch = []
-                ids_batch = []
-                file_chunk_map = {}
-                
-        except Exception as e:
-            logging.error(f"Error processing {file_path}: {e}")
-
-    # Process remaining batch
-    if documents_batch:
-        try:
-            vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
-            for fpath, data in file_chunk_map.items():
-                state[fpath] = data
+                # Check if new or modified
+                if str_path not in state or state[str_path].get("mtime") != mtime:
+                    files_to_process.append(file_path)
+            except OSError:
+                logging.warning(f"Could not access {file_path}")
+    
+        # Detect deletions
+        files_to_delete = [f for f in state.keys() if f not in files_seen]
+    
+        logging.info(f"Processing plan: {len(files_to_process)} to index/update, {len(files_to_delete)} to delete")
+    
+        if not files_to_process and not files_to_delete:
+            logging.info("No changes detected. Index is up to date.")
+            return
+    
+        # Process Deletions
+        if files_to_delete:
+            logging.info(f"Removing {len(files_to_delete)} deleted files from index...")
+            for file_path in files_to_delete:
+                chunk_ids = state[file_path].get("chunk_ids", [])
+                if chunk_ids:
+                    try:
+                        vectorstore.delete(ids=chunk_ids)
+                    except Exception as e:
+                        logging.error(f"Error deleting chunks for {file_path}: {e}")
+                del state[file_path]
             save_state(state)
-        except Exception as e:
-            logging.error(f"Error adding final batch: {e}")
     
-    logging.info("Indexing complete.")
+        # Process Updates/Additions
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=config.CHUNK_SIZE,
+            chunk_overlap=config.CHUNK_OVERLAP,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+    
+        batch_size = 20  # Reduced from 100 to avoid SQLite limits
+        documents_batch = []
+        ids_batch = []
+        
+        # Create a mapping to easily update state after batch commit
+        file_chunk_map = {} # filepath -> [new_chunk_ids]
+    
+        logging.info("Starting indexing process...")
+        
+        import hashlib
+        
+        pbar = tqdm(files_to_process, desc="Indexing")
+        for i, file_path in enumerate(pbar):
+            # Update progress bar with current file name (truncated if long)
+            pbar.set_postfix(file=file_path.name[-30:])
+            
+            str_path = str(file_path)
+            content = read_file_content(file_path)
+            
+            # If existing file is being updated, remove old chunks first
+            if str_path in state:
+                old_ids = state[str_path].get("chunk_ids", [])
+                if old_ids:
+                    try:
+                        vectorstore.delete(ids=old_ids)
+                    except Exception as e:
+                        logging.error(f"Error cleaning up old chunks for {str_path}: {e}")
+    
+            if not content or len(content.strip()) == 0:
+                # Update state to track we saw it even if empty, so we don't re-process endlessly
+                state[str_path] = {"mtime": os.path.getmtime(file_path), "chunk_ids": []}
+                continue
+                
+            try:
+                current_mtime = os.path.getmtime(file_path)
+                chunks = text_splitter.create_documents(
+                    [content], 
+                    metadatas=[{
+                        "source": str_path,
+                        "filename": file_path.name,
+                        "file_modified": time.ctime(current_mtime)
+                    }]
+                )
+                
+                file_new_ids = []
+                for j, chunk in enumerate(chunks):
+                    chunk.metadata["chunk_index"] = j
+                    
+                    # Robust deterministic ID generation
+                    # Hash path + mtime + index to ensure uniqueness and validity
+                    id_str = f"{str_path}_{current_mtime}_{j}"
+                    chunk_id = hashlib.md5(id_str.encode()).hexdigest()
+                    
+                    documents_batch.append(chunk)
+                    ids_batch.append(chunk_id)
+                    file_new_ids.append(chunk_id)
+    
+                file_chunk_map[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
+    
+                # Batch processed
+                if len(documents_batch) >= batch_size:
+                    try:
+                        vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
+                        
+                        # Update state for files that were successfully committed
+                        for fpath, data in file_chunk_map.items():
+                            state[fpath] = data
+                        save_state(state)
+                    except Exception as e:
+                        logging.error(f"Error adding batch of {len(documents_batch)} docs: {e}")
+                        # Optional: Could implement retry logic or per-item fallback here
+                    
+                    documents_batch = []
+                    ids_batch = []
+                    file_chunk_map = {}
+                    
+            except Exception as e:
+                logging.error(f"Error processing {file_path}: {e}")
+    
+        # Process remaining batch
+        if documents_batch:
+            try:
+                vectorstore.add_documents(documents=documents_batch, ids=ids_batch)
+                for fpath, data in file_chunk_map.items():
+                    state[fpath] = data
+                save_state(state)
+            except Exception as e:
+                logging.error(f"Error adding final batch: {e}")
+        
+        logging.info("Indexing complete.")
+
+    finally:
+        # Clean up lock file
+        if lock_file.exists():
+            lock_file.unlink()
 
 if __name__ == "__main__":
     main()
