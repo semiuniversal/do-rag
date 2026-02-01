@@ -26,7 +26,11 @@ Features:
 
 ## Configuration
 
-Edit `config.py` to set your document paths:
+1.  Copy `config.example.py` to `config.py`:
+    ```bash
+    cp config.example.py config.py
+    ```
+2.  Edit `config.py` to set your document paths:
 
 ```python
 DOCUMENT_DIRECTORIES = [

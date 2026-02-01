@@ -9,7 +9,7 @@ import logging
 # For now, let's copy the core search logic to avoid stdout pollution which breaks MCP.
 
 from langchain_chroma import Chroma
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 import config
 
 # Configure logging to stderr so it doesn't break MCP stdout transport

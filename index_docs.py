@@ -23,7 +23,7 @@ except ImportError:
     Docx2txtLoader = None
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
 import chromadb
 from chromadb.config import Settings
@@ -59,25 +59,38 @@ def save_state(state: Dict[str, Dict[str, Any]]):
 def get_files_to_index(directories: List[str], extensions: List[str]) -> List[Path]:
     """Recursively find all files with matching extensions in given directories."""
     files = []
-    for directory in directories:
-        path = Path(directory)
-        if not path.exists():
-            logging.warning(f"Directory not found: {directory}")
-            continue
-        
-        logging.info(f"Scanning {directory}...")
-        for root, _, filenames in os.walk(path):
-            # Skip hidden directories
-            if any(part.startswith('.') for part in Path(root).parts):
+    print("Scanning directories...", file=sys.stderr)
+    
+    total_scanned = 0
+    # Use tqdm for a spinner/counter effect during scanning
+    with tqdm(desc="Scanning files", unit=" items") as pbar:
+        for directory in directories:
+            path = Path(directory)
+            if not path.exists():
+                logging.warning(f"Directory not found: {directory}")
                 continue
-                
-            for filename in filenames:
-                if filename.startswith('.'):
+            
+            logging.info(f"Scanning {directory}...")
+            
+            # os.walk can be slow on large trees, so we just update the counter as we go
+            for root, _, filenames in os.walk(path):
+                # Skip hidden directories
+                if any(part.startswith('.') for part in Path(root).parts):
                     continue
                     
-                file_path = Path(root) / filename
-                if file_path.suffix.lower() in extensions:
-                    files.append(file_path)
+                for filename in filenames:
+                    total_scanned += 1
+                    if total_scanned % 100 == 0:
+                        pbar.update(100)
+                        
+                    if filename.startswith('.'):
+                        continue
+                        
+                    file_path = Path(root) / filename
+                    if file_path.suffix.lower() in extensions:
+                        files.append(file_path)
+        pbar.update(total_scanned % 100) # Final update
+        
     return files
 
 def read_file_content(file_path: Path) -> str:

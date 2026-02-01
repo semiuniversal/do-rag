@@ -2,7 +2,7 @@ import argparse
 import sys
 from typing import List, Tuple
 from langchain_chroma import Chroma
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 import chromadb
 import config
 
