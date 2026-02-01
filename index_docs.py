@@ -1,5 +1,6 @@
 import os
 import sys
+print("Loading RAG system dependencies...", file=sys.stderr)
 import time
 import json
 import argparse
@@ -206,7 +207,11 @@ def main():
 
     logging.info("Starting indexing process...")
     
-    for i, file_path in enumerate(tqdm(files_to_process, desc="Processing files")):
+    pbar = tqdm(files_to_process, desc="Indexing")
+    for i, file_path in enumerate(pbar):
+        # Update progress bar with current file name (truncated if long)
+        pbar.set_postfix(file=file_path.name[-30:])
+        
         str_path = str(file_path)
         content = read_file_content(file_path)
         
