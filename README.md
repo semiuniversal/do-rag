@@ -23,12 +23,12 @@ Features:
     ```bash
     uv sync
     ```
-3.  **Setup the Custom Model**:
-    This project requires a custom Ollama model configuration to handle large batches.
+3.  **Start the Ollama Service**:
+    Use the provided script to start the server (it handles custom model creation and logging automatically).
     ```bash
-    bash setup_model.sh
+    bash run_ollama.sh
     ```
-    *This creates a `nomic-rag` model in Ollama with an 8192 token window.*
+    *This creates the `nomic-rag` model if missing and logs output to `ollama_server.log`.*
 
 4.  **Configure Paths**:
     Copy `config.example.py` to `config.py` and edit it to point to your document folders.
