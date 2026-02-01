@@ -15,7 +15,8 @@ fi
 # 2. Start Ollama Server in Background
 echo "Starting Ollama server..."
 echo "Logs are being saved to: $LOG_FILE"
-touch "$LOG_FILE"
+# Clear log file on startup
+> "$LOG_FILE"
 ollama serve > >(tee -a "$LOG_FILE") 2>&1 &
 SERVER_PID=$!
 

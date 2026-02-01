@@ -36,7 +36,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("indexing.log"),
+        logging.FileHandler("indexing.log", mode='w'),
         logging.StreamHandler()
     ]
 )
@@ -246,7 +246,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 5  # Increased to 5. Safe with 8k model (5k chars < 8k tokens) and loop logic fix.
+        batch_size = 1  # Reduced to 1. Model clamped to 2048 context, so even 5 chunks (2500+ tokens) can overflow.
         documents_batch = []
         ids_batch = []
         
