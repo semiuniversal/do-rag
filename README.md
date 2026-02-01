@@ -82,7 +82,6 @@ Use the background service script (logs saved to `mcp_server.log`):
 ```
 *Endpoint: `http://localhost:8000/sse`*
 
-#### Connecting from LM Studio
 #### Connecting from LM Studio (v0.4.x)
 1.  In the **Developer** tab, click the **MCP.json** button at the top (embedded editor).
 2.  Paste this SSE configuration:
@@ -95,24 +94,5 @@ Use the background service script (logs saved to `mcp_server.log`):
   }
 }
 ```
-
-```json
-{
-  "local-rag": {
-    "type": "sse",
-    "url": "http://localhost:8000/sse"
-  }
-}
-```
-
-```json
-{
-  "local-rag": {
-    "type": "sse",
-    "url": "http://localhost:8000/sse"
-  }
-}
-```
-*(Make sure to remove any old "command": "wsl.exe" entries)*
 
 *Note: You can still run it manually with `uv run server.py`, but the background service is recommended for logs and stability.*
