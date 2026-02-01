@@ -13,3 +13,4 @@ test_docs_incremental/
 *.egg-info/
 dist/
 build/
+chroma.sqlite3
