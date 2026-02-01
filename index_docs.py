@@ -73,8 +73,12 @@ def get_files_to_index(directories: List[str], extensions: List[str]) -> List[Pa
             logging.info(f"Scanning {directory}...")
             
             # os.walk can be slow on large trees, so we just update the counter as we go
-            for root, _, filenames in os.walk(path):
-                # Skip hidden directories
+            for root, dirs, filenames in os.walk(path):
+                # Optimize: Prune ignored directories in-place to prevent os.walk from entering them
+                # This is critical for speed when skipping node_modules, .venv, etc.
+                dirs[:] = [d for d in dirs if d not in config.IGNORED_DIRECTORIES and not d.startswith('.')]
+                
+                # Skip hidden directories (redundant check for root but keeps logic safe if manual walk implemented)
                 if any(part.startswith('.') for part in Path(root).parts):
                     continue
                     
@@ -234,7 +238,7 @@ def main():
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-        batch_size = 20  # Reduced from 100 to avoid SQLite limits
+        batch_size = 5  # Reduced to 5 to avoid Ollama context overflow errors
         documents_batch = []
         ids_batch = []
         
