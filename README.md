@@ -88,9 +88,11 @@ Use the background service script (logs saved to `mcp_server.log`):
 
 ```json
 {
-  "local-rag": {
-    "type": "sse",
-    "url": "http://localhost:8000/sse"
+  "mcpServers": {
+    "local-rag": {
+      "type": "sse",
+      "url": "http://localhost:8000/sse"
+    }
   }
 }
 ```

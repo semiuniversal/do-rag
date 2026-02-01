@@ -1,16 +1,25 @@
-from mcp.server.fastmcp import FastMCP
-from typing import List
-import sys
+# Configure logging to stderr so it doesn't break MCP stdout transport
 import logging
+import sys
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+logging.info("Starting server.py...")
 
-# Re-use existing search logic
-# We need to suppress print statements from search_docs if we import it, 
-# or better yet, refactor search_docs to separate logic from printing.
-# For now, let's copy the core search logic to avoid stdout pollution which breaks MCP.
-
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
-import config
+try:
+    from mcp.server.fastmcp import FastMCP
+    logging.info("Imported FastMCP")
+    from typing import List
+    
+    # Re-use existing search logic
+    logging.info("Importing langchain...")
+    from langchain_chroma import Chroma
+    from langchain_ollama import OllamaEmbeddings
+    logging.info("Imported langchain")
+    
+    import config
+    logging.info("Imported config")
+except Exception as e:
+    logging.error(f"Import failed: {e}")
+    sys.exit(1)
 
 # Configure logging to stderr so it doesn't break MCP stdout transport
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -65,4 +74,16 @@ Relevance Score: {score:.4f}
         return f"Error performing search: {str(e)}"
 
 if __name__ == "__main__":
-    mcp.run()
+    # Force SSE mode for debugging
+    logging.info("Calling mcp.run(transport='sse', host='0.0.0.0', port=8000)...")
+    # Note: FastMCP.run() arguments might vary by version. 
+    # If this fails, we will revert to CLI. 
+    # But usually it passes kwargs to uvicorn.run
+    try:
+        mcp.settings.port = 8000
+        mcp.settings.host = "0.0.0.0"
+        mcp.run(transport='sse')
+    except Exception as e:
+        logging.error(f"Run failed: {e}")
+        # Fallback for older SDK versions that might rely on CLI
+        mcp.run()

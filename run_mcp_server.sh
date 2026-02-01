@@ -2,7 +2,7 @@
 
 # Configuration
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SERVER_CMD="uv run server.py --transport sse"
+SERVER_CMD="uv run server.py --transport sse --host 0.0.0.0"
 PID_FILE="${SCRIPT_DIR}/mcp_server.pid"
 LOG_FILE="${SCRIPT_DIR}/mcp_server.log"
 
