@@ -49,13 +49,17 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
    ```bash
    cp config.example.py config.py
    ```
-   Set your document directories:
+   Set your document directories and review the supported file types:
    ```python
    DOCUMENT_DIRECTORIES = [
        "/mnt/c/Users/yourname/Documents",
        "/mnt/c/Users/yourname/Projects"
    ]
+
+   SUPPORTED_EXTENSIONS = ['.md', '.txt', '.docx']
    ```
+
+   > **Important**: Add all directories you want searchable. The indexer will recursively scan these paths. Use absolute paths — on WSL, Windows drives are mounted under `/mnt/c/`, `/mnt/d/`, etc.
 
 ## Quick Start
 
@@ -211,13 +215,18 @@ Edit `config.py` (copied from `config.example.py`):
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `DOCUMENT_DIRECTORIES` | `[]` | Directories to index |
-| `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx` | File types to process |
+| `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx` | File types to process (see [Limitations](#limitations)) |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | Model for document embeddings |
 | `LLM_MODEL` | `qwen2.5-coder:7b-instruct-q5_K_M` | Model for RAG answers |
 | `CHUNK_SIZE` | `1000` | Characters per chunk |
 | `CHUNK_OVERLAP` | `200` | Overlap between chunks |
 | `TOP_K_RESULTS` | `10` | Number of search results |
+
+## Limitations
+
+- **Supported file types**: The indexer supports **Markdown** (`.md`), **plain text** (`.txt`), and **Word documents** (`.docx`). Other formats like `.pdf`, `.xlsx`, and `.pptx` are not yet supported.
+- **No real-time indexing**: Documents are indexed on-demand via `index_docs.py`. New or modified files won't be searchable until the indexer is re-run.
 
 ## Troubleshooting
 
