@@ -9,6 +9,7 @@ PID_FILE="ollama.pid"
 # Suppress Warnings
 export OLLAMA_LOG_LEVEL=ERROR
 export OLLAMA_DEBUG=0
+export OLLAMA_HOST=0.0.0.0
 export GIN_MODE=release
 
 check_ready() {
@@ -29,7 +30,7 @@ check_ready() {
 }
 
 check_models() {
-    # Check Base Model
+    # Check Base Embedding Model
     if ollama list | grep -q "$BASE_MODEL"; then
         echo "Base model '$BASE_MODEL' found."
     else
@@ -37,7 +38,19 @@ check_models() {
         ollama pull "$BASE_MODEL"
     fi
 
-    # Check Custom Model
+    # Check LLM Model
+    # Extract model name from config or hardcode for script simplicity if needed, 
+    # but here we use a variable corresponding to config
+    LLM_MODEL="qwen2.5-coder:7b-instruct-q5_K_M"
+    
+    if ollama list | grep -q "$LLM_MODEL"; then
+         echo "LLM model '$LLM_MODEL' found."
+    else
+         echo "LLM model '$LLM_MODEL' NOT found. Pulling (this may take a while)..."
+         ollama pull "$LLM_MODEL"
+    fi
+
+    # Check Custom Embedding Model (if still using custom modelfile for embeddings)
     if ollama list | grep -q "$MODEL_NAME"; then
         echo "Model '$MODEL_NAME' ready."
     else

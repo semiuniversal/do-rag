@@ -2,6 +2,7 @@
 
 # Configuration
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+export RICH_CONSOLE_FORCE_TERMINAL=0
 SERVER_CMD="uv run server.py --transport sse --host 0.0.0.0"
 PID_FILE="${SCRIPT_DIR}/mcp_server.pid"
 LOG_FILE="${SCRIPT_DIR}/mcp_server.log"
@@ -19,7 +20,7 @@ case "$1" in
             fi
         fi
 
-        echo "Starting MCP Server (SSE Mode)..."
+        echo "Starting MCP Server (Dual Transport)..."
         # Truncate log file on new start for cleanliness
         echo "--- Session Start: $(date) ---" > "$LOG_FILE"
         
@@ -29,7 +30,9 @@ case "$1" in
         # Save PID
         echo $! > "$PID_FILE"
         echo "MCP Server started with PID $(cat "$PID_FILE"). Logs: $LOG_FILE"
-        echo "Endpoint: http://localhost:8000/sse"
+        echo "Endpoints:"
+        echo "  Streamable HTTP: http://localhost:8000/mcp  (Open WebUI)"
+        echo "  SSE:             http://localhost:8000/sse-transport/sse  (IDEs)"
         ;;
     
     stop)

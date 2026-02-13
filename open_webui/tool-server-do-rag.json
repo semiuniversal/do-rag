@@ -1,0 +1,1 @@
+[{"type":"mcp","url":"http://host.docker.internal:8000/mcp","spec_type":"url","spec":"","path":"openapi.json","auth_type":"none","key":"","info":{"id":"do-rag","name":"Local RAG Search","description":""}}]
