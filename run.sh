@@ -5,19 +5,33 @@ cd "$SCRIPT_DIR"
 echo "=== Starting do-rag Services ==="
 
 # 1. Start Ollama (Force Restart to ensure port binding)
-echo "[1/3] Restarting Ollama..."
+echo "[1/4] Restarting Ollama..."
 ./run_ollama.sh stop > /dev/null 2>&1
 sleep 1
 ./run_ollama.sh start
 
-# 2. Start MCP Server (Force Restart)
-echo "[2/3] Restarting MCP Server..."
+# 2. Pull required models if missing
+echo "[2/4] Checking models..."
+EMBEDDING_MODEL=$(python3 -c "import config; print(config.EMBEDDING_MODEL)" 2>/dev/null)
+LLM_MODEL=$(python3 -c "import config; print(config.LLM_MODEL)" 2>/dev/null)
+
+for model in "$EMBEDDING_MODEL" "$LLM_MODEL"; do
+    if [ -n "$model" ] && ! ollama list 2>/dev/null | grep -q "$model"; then
+        echo "  Pulling $model..."
+        ollama pull "$model"
+    else
+        echo "  $model ✓"
+    fi
+done
+
+# 3. Start MCP Server (Force Restart)
+echo "[3/4] Restarting MCP Server..."
 ./run_mcp_server.sh stop > /dev/null 2>&1
 sleep 1
 ./run_mcp_server.sh start
 
-# 3. Start Open WebUI (Already handles restart)
-echo "[3/3] Starting Open WebUI..."
+# 4. Start Open WebUI (Already handles restart)
+echo "[4/4] Starting Open WebUI..."
 ./run_webui.sh
 
 echo "================================"

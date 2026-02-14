@@ -214,9 +214,11 @@ Edit `config.py` (copied from `config.example.py`):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `BACKEND` | `"ollama"` | LLM backend: `"ollama"` or `"lm_studio"` |
 | `DOCUMENT_DIRECTORIES` | `[]` | Directories to index |
 | `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx` | File types to process (see [Limitations](#limitations)) |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `LM_STUDIO_BASE_URL` | `http://localhost:1234/v1` | LM Studio API endpoint |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | Model for document embeddings |
 | `LLM_MODEL` | `qwen2.5-coder:7b-instruct-q5_K_M` | Model for RAG answers |
 | `CHUNK_SIZE` | `1000` | Characters per chunk |

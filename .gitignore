@@ -4,6 +4,7 @@ __pycache__/
 .env
 chroma_db/
 indexing_state.json
+settings.json
 indexing.log
 config.py
 test_docs/

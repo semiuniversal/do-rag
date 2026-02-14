@@ -9,6 +9,9 @@ DOCUMENT_DIRECTORIES = [
     # Windows paths (WSL)
     # "/mnt/c/Users/username/Documents",
     
+    # macOS paths
+    # "/Users/username/Documents",
+
     # Linux paths
     # "/home/username/documents",
 ]
@@ -16,9 +19,18 @@ DOCUMENT_DIRECTORIES = [
 # File extensions to process
 SUPPORTED_EXTENSIONS = ['.md', '.txt', '.docx']
 
-# Ollama configuration
+# LLM Backend: "ollama" or "lm_studio"
+BACKEND = "ollama"
+
+# Ollama settings (used when BACKEND = "ollama")
 OLLAMA_BASE_URL = "http://localhost:11434"
+
+# LM Studio settings (used when BACKEND = "lm_studio")
+LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
+
+# Model names (used by both backends — make sure these are loaded/pulled)
 EMBEDDING_MODEL = "nomic-embed-text"
+LLM_MODEL = "qwen2.5-coder:7b-instruct-q5_K_M"
 
 # ChromaDB configuration
 PROJECT_ROOT = Path(__file__).parent.absolute()

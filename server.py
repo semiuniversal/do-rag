@@ -10,11 +10,13 @@ try:
     # Re-use existing search logic
     logging.info("Importing langchain...")
     from langchain_chroma import Chroma
-    from langchain_ollama import OllamaEmbeddings, ChatOllama
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.runnables import RunnablePassthrough
     logging.info("Imported langchain")
+
+    from llm_backend import get_embeddings, get_llm
+    logging.info("Imported llm_backend")
     
     import config
     logging.info("Imported config")
@@ -34,6 +36,119 @@ except Exception as e:
     logging.error(f"FastMCP init failed: {e}")
     sys.exit(1)
 
+# --- Indexing & Config Tools ---
+
+import asyncio
+import settings as settings_module
+from indexer import get_current_job, IndexingJob
+
+_indexing_task = None  # holds the background asyncio.Task
+
+
+@mcp.tool()
+async def start_indexing(reset: bool = False) -> str:
+    """
+    Start indexing documents in the background.
+    Scans configured directories and indexes new or modified files.
+    Set reset=True to clear the index and re-index everything.
+    """
+    global _indexing_task
+    job = get_current_job()
+
+    if job.status in ("scanning", "indexing"):
+        return f"Indexing is already running. {job.get_status_text()}"
+
+    # Create a fresh job
+    from indexer import _current_job
+    import indexer
+    indexer._current_job = IndexingJob()
+    job = indexer._current_job
+
+    _indexing_task = asyncio.create_task(job.start(reset=reset))
+    # Give it a moment to start scanning
+    await asyncio.sleep(0.5)
+    return job.get_status_text()
+
+
+@mcp.tool()
+async def get_indexing_status() -> str:
+    """
+    Get the current status of the indexing job.
+    Shows progress, current file, ETA, and error count.
+    """
+    job = get_current_job()
+    return job.get_status_text()
+
+
+@mcp.tool()
+async def stop_indexing() -> str:
+    """
+    Stop the currently running indexing job.
+    Already-indexed files are kept in the index.
+    """
+    job = get_current_job()
+    if job.status not in ("scanning", "indexing"):
+        return "No indexing job is currently running."
+    job.cancel()
+    return "Indexing cancelled. " + job.get_status_text()
+
+
+@mcp.tool()
+def list_config() -> str:
+    """
+    Show current configuration: indexed directories, excluded directories, and file extensions.
+    """
+    s = settings_module.load_settings()
+    dirs = "\n".join(f"  • {d}" for d in s["directories"]) or "  (none configured)"
+    excl = "\n".join(f"  • {e}" for e in s["exclusions"]) or "  (none)"
+    exts = ", ".join(s["extensions"]) or "(none)"
+    return f"Directories:\n{dirs}\n\nExclusions:\n{excl}\n\nFile types: {exts}"
+
+
+@mcp.tool()
+def add_directory(path: str) -> str:
+    """Add a directory to be indexed. Use absolute paths."""
+    from pathlib import Path
+    if not Path(path).exists():
+        return f"Warning: '{path}' does not exist. Added anyway — it will be skipped during indexing."
+    result = settings_module.add_directory(path)
+    return f"Directory added. Current directories:\n" + "\n".join(f"  • {d}" for d in result)
+
+
+@mcp.tool()
+def remove_directory(path: str) -> str:
+    """Remove a directory from indexing."""
+    result = settings_module.remove_directory(path)
+    return f"Directory removed. Current directories:\n" + "\n".join(f"  • {d}" for d in result) if result else "No directories configured."
+
+
+@mcp.tool()
+def add_exclusion(pattern: str) -> str:
+    """Add a directory name to exclude from indexing (e.g., '$Recycle.Bin', 'node_modules')."""
+    result = settings_module.add_exclusion(pattern)
+    return f"Exclusion added. Current exclusions:\n" + "\n".join(f"  • {e}" for e in result)
+
+
+@mcp.tool()
+def remove_exclusion(pattern: str) -> str:
+    """Remove a directory exclusion pattern."""
+    result = settings_module.remove_exclusion(pattern)
+    return f"Exclusion removed. Current exclusions:\n" + "\n".join(f"  • {e}" for e in result) if result else "No exclusions configured."
+
+
+@mcp.tool()
+def add_extension(ext: str) -> str:
+    """Add a file extension to index (e.g., '.py', '.pdf'). Leading dot is added if missing."""
+    result = settings_module.add_extension(ext)
+    return f"Extension added. Current extensions: {', '.join(result)}"
+
+
+@mcp.tool()
+def remove_extension(ext: str) -> str:
+    """Remove a file extension from indexing."""
+    result = settings_module.remove_extension(ext)
+    return f"Extension removed. Current extensions: {', '.join(result)}" if result else "No extensions configured."
+
 
 
 
@@ -46,10 +161,7 @@ def search_documents(query: str, top_k: int = 5) -> str:
     logging.info(f"Searching for: {query}")
     
     try:
-        embeddings = OllamaEmbeddings(
-            base_url=config.OLLAMA_BASE_URL,
-            model=config.EMBEDDING_MODEL
-        )
+        embeddings = get_embeddings()
         
         vectorstore = Chroma(
             collection_name=config.COLLECTION_NAME,
@@ -94,10 +206,7 @@ def ask_documents(query: str) -> str:
     
     try:
         # Initialize Embeddings
-        embeddings = OllamaEmbeddings(
-            base_url=config.OLLAMA_BASE_URL,
-            model=config.EMBEDDING_MODEL
-        )
+        embeddings = get_embeddings()
         
         # Initialize Vector Store
         vectorstore = Chroma(
@@ -107,11 +216,7 @@ def ask_documents(query: str) -> str:
         )
         
         # Initialize LLM
-        llm = ChatOllama(
-            base_url=config.OLLAMA_BASE_URL,
-            model=config.LLM_MODEL,
-            temperature=0.3
-        )
+        llm = get_llm(temperature=0.3)
         
         # Create Retriever
         retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
