@@ -1,28 +1,23 @@
 import argparse
 import sys
 from typing import List, Tuple
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
-import chromadb
+from langchain_qdrant import QdrantVectorStore
+from llm_backend import get_embeddings
 import config
 
 def search(query: str, top_k: int = config.TOP_K_RESULTS):
     """Search for documents matching the query."""
     
-    # Initialize connection
     try:
-        embeddings = OllamaEmbeddings(
-            base_url=config.OLLAMA_BASE_URL,
-            model=config.EMBEDDING_MODEL
-        )
+        embeddings = get_embeddings()
     except Exception as e:
-        print(f"Error connecting to Ollama: {e}")
+        print(f"Error connecting to embedding model: {e}")
         sys.exit(1)
 
-    vectorstore = Chroma(
+    vectorstore = QdrantVectorStore.from_existing_collection(
+        embedding=embeddings,
         collection_name=config.COLLECTION_NAME,
-        embedding_function=embeddings,
-        persist_directory=config.CHROMA_PERSIST_DIRECTORY
+        url=config.QDRANT_URL,
     )
 
     # Perform search
@@ -37,11 +32,8 @@ def search(query: str, top_k: int = config.TOP_K_RESULTS):
         return
 
     for i, (doc, score) in enumerate(results, 1):
-        # Chroma returns distance, convert to pseudo-similarity if needed, 
-        # or just display distance (lower is better for Euclidean/Cosine distance usually in Chroma default)
-        # Note: Chroma default is L2 distance, lower = better. 
         metadata = doc.metadata
-        print(f"Result {i} (Distance: {score:.4f})")
+        print(f"Result {i} (Score: {score:.4f})")
         print(f"File: {metadata.get('source', 'Unknown')}")
         print(f"Modified: {metadata.get('file_modified', 'Unknown')}")
         print("-" * 20)

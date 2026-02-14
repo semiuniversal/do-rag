@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .env
-chroma_db/
 indexing_state.json
 settings.json
 indexing.log

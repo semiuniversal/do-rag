@@ -1,11 +1,12 @@
 # Local Document RAG System
 
-A privacy-preserving, local document search system using RAG (Retrieval-Augmented Generation) with [Ollama](https://ollama.com/) and [ChromaDB](https://www.trychroma.com/).
+A privacy-preserving, local document search system using RAG (Retrieval-Augmented Generation) with [Ollama](https://ollama.com/) and [Qdrant](https://qdrant.tech/).
 
 ## Features
 
 - **Local & Private**: Runs entirely on your machine — no data leaves your system.
 - **Incremental Indexing**: Only processes new or modified files.
+- **Robust Vector Search**: Uses Qdrant (Docker) for high-performance, crash-resilient vector storage.
 - **MCP Server**: Exposes search tools via the [Model Context Protocol](https://modelcontextprotocol.io/) with dual transport support:
   - **Streamable HTTP** at `/mcp` — for Open WebUI and other HTTP-based clients
   - **SSE** at `/sse-transport/sse` — for IDEs (LM Studio, Claude Desktop, etc.)
@@ -15,15 +16,15 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
 
 ```
 ┌──────────────┐     ┌──────────────────┐     ┌───────────┐
-│  Open WebUI  │────▶│   MCP Server     │────▶│ ChromaDB  │
-│  (Docker)    │     │  (server.py)     │     │           │
-│  :3000       │     │  :8000           │     └───────────┘
-└──────────────┘     │                  │           │
-                     │  Streamable HTTP │     ┌───────────┐
-┌──────────────┐     │  + SSE           │────▶│  Ollama   │
-│  IDE / CLI   │────▶│                  │     │  :11434   │
-│  (SSE)       │     └──────────────────┘     └───────────┘
-└──────────────┘
+│  Open WebUI  │────▶│   MCP Server     │────▶│  Qdrant   │
+│  (Docker)    │     │  (server.py)     │     │ (Docker)  │
+│  :3000       │     │  :8000           │     │ :6333     │
+└──────────────┘     │                  │     └───────────┘
+                     │  Streamable HTTP │           │
+┌──────────────┐     │  + SSE           │     ┌───────────┐
+│  IDE / CLI   │────▶│                  │────▶│  Ollama   │
+│  (SSE)       │     └──────────────────┘     │  :11434   │
+└──────────────┘                              └───────────┘
 ```
 
 ## Prerequisites
@@ -199,8 +200,9 @@ For `stdio` mode (direct process spawning), use:
 
 | Script | Purpose |
 |--------|---------|
-| `run.sh` | Start all services (Ollama + MCP + Open WebUI) |
+| `run.sh` | Start all services (Ollama + Qdrant + MCP + Open WebUI) |
 | `run_ollama.sh` | Manage Ollama (`start`/`stop`/`status`/`restart`) |
+| `run_qdrant.sh` | Manage Qdrant (`start`/`stop`/`status`) |
 | `run_mcp_server.sh` | Manage MCP server (`start`/`stop`/`status`/`logs`) |
 | `run_webui.sh` | Start/restart Open WebUI Docker container |
 
@@ -214,16 +216,14 @@ Edit `config.py` (copied from `config.example.py`):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `BACKEND` | `"ollama"` | LLM backend: `"ollama"` or `"lm_studio"` |
+| `QDRANT_HOST` | `"localhost"` | Qdrant hostname |
+| `QDRANT_PORT` | `6333` | Qdrant API port |
 | `DOCUMENT_DIRECTORIES` | `[]` | Directories to index |
-| `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx` | File types to process (see [Limitations](#limitations)) |
+| `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx` | File types to process |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `LM_STUDIO_BASE_URL` | `http://localhost:1234/v1` | LM Studio API endpoint |
-| `EMBEDDING_MODEL` | `nomic-embed-text` | Model for document embeddings |
-| `LLM_MODEL` | `qwen2.5-coder:7b-instruct-q5_K_M` | Model for RAG answers |
-| `CHUNK_SIZE` | `1000` | Characters per chunk |
-| `CHUNK_OVERLAP` | `200` | Overlap between chunks |
-| `TOP_K_RESULTS` | `10` | Number of search results |
+| `EMBEDDING_MODEL` | `nomic-rag` | Model for document embeddings |
+| `LLM_MODEL` | `qwen2.5:14b` | Model for RAG answers |
+| `INDEXING_BATCH_SIZE` | `10` | Chunks per Qdrant write (higher = faster) |
 
 ## Limitations
 

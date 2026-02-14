@@ -9,7 +9,8 @@ try:
     
     # Re-use existing search logic
     logging.info("Importing langchain...")
-    from langchain_chroma import Chroma
+    from langchain_qdrant import QdrantVectorStore
+    from qdrant_client import QdrantClient
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.output_parsers import StrOutputParser
     from langchain_core.runnables import RunnablePassthrough
@@ -150,6 +151,193 @@ def remove_extension(ext: str) -> str:
     return f"Extension removed. Current extensions: {', '.join(result)}" if result else "No extensions configured."
 
 
+@mcp.tool()
+def clear_index(confirm: bool = False) -> str:
+    """
+    Clear the entire document index. This is destructive and expensive to rebuild.
+    First call without confirm to see what would be deleted.
+    Call with confirm=True to actually clear.
+    """
+    import json
+    from indexer import STATE_FILE
+
+    # Check Qdrant collection
+    try:
+        client = QdrantClient(url=config.QDRANT_URL)
+        collection_info = client.get_collection(config.COLLECTION_NAME)
+        point_count = collection_info.points_count or 0
+    except Exception:
+        point_count = 0
+
+    has_state = STATE_FILE.exists()
+    file_count = 0
+    if has_state:
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+            file_count = len(state)
+        except Exception:
+            pass
+
+    if point_count == 0 and not has_state:
+        return "Index is already empty."
+
+    if not confirm:
+        return (
+            f"⚠️ This will permanently delete the index containing "
+            f"{file_count} files ({point_count} chunks). "
+            f"Rebuilding is expensive. "
+            f"To proceed, call clear_index with confirm=True."
+        )
+
+    # Actually clear
+    cleared = []
+    try:
+        client = QdrantClient(url=config.QDRANT_URL)
+        client.delete_collection(config.COLLECTION_NAME)
+        cleared.append("Qdrant collection")
+    except Exception as e:
+        logging.warning(f"Could not delete Qdrant collection: {e}")
+    if has_state:
+        STATE_FILE.unlink()
+        cleared.append("indexing state")
+
+    return f"Index cleared ({', '.join(cleared)}). {file_count} files and {point_count} chunks removed. Run start_indexing() to rebuild."
+
+
+@mcp.tool()
+def show_index_stats() -> str:
+    """
+    Show statistics about the current document index: number of files indexed,
+    total chunks, and a list of indexed files.
+    """
+    import json
+    from indexer import STATE_FILE
+
+    # Get chunk count from Qdrant
+    qdrant_chunks = 0
+    try:
+        client = QdrantClient(url=config.QDRANT_URL)
+        info = client.get_collection(config.COLLECTION_NAME)
+        qdrant_chunks = info.points_count or 0
+    except Exception:
+        pass
+
+    if not STATE_FILE.exists():
+        if qdrant_chunks > 0:
+            return f"Qdrant has {qdrant_chunks} chunks but no state file. Consider re-indexing."
+        return "No index found. Run start_indexing() to create one."
+
+    try:
+        with open(STATE_FILE, "r") as f:
+            state = json.load(f)
+    except Exception as e:
+        return f"Error reading index state: {e}"
+
+    if not state:
+        return "Index is empty. Run start_indexing() to index documents."
+
+    total_files = len(state)
+
+    # List files (truncate if too many)
+    file_list = sorted(state.keys())
+    if len(file_list) > 20:
+        shown = "\n".join(f"  • {f}" for f in file_list[:20])
+        shown += f"\n  ... and {len(file_list) - 20} more"
+    else:
+        shown = "\n".join(f"  • {f}" for f in file_list)
+
+    return f"Index contains {total_files} files ({qdrant_chunks} chunks in Qdrant).\n\nFiles:\n{shown}"
+
+
+@mcp.tool()
+def system_stats() -> str:
+    """
+    Show system resource usage: RAM, VRAM (GPU), disk space, and CPU load
+    for the do-rag application processes.
+    """
+    import subprocess
+    import shutil
+    import os
+
+    lines = []
+
+    # --- RAM ---
+    try:
+        with open("/proc/meminfo", "r") as f:
+            meminfo = {}
+            for line in f:
+                parts = line.split()
+                meminfo[parts[0].rstrip(":")] = int(parts[1])  # in kB
+        total_gb = meminfo["MemTotal"] / 1048576
+        avail_gb = meminfo["MemAvailable"] / 1048576
+        used_gb = total_gb - avail_gb
+        lines.append(f"RAM: {used_gb:.1f} / {total_gb:.1f} GB ({100 * used_gb / total_gb:.0f}% used)")
+    except Exception as e:
+        lines.append(f"RAM: unavailable ({e})")
+
+    # --- VRAM (GPU) ---
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total,gpu_name", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            parts = result.stdout.strip().split(", ")
+            used_mb, total_mb = int(parts[0]), int(parts[1])
+            gpu_name = parts[2] if len(parts) > 2 else "GPU"
+            lines.append(f"VRAM ({gpu_name}): {used_mb} / {total_mb} MB ({100 * used_mb // total_mb}% used)")
+        else:
+            lines.append("VRAM: nvidia-smi error")
+    except FileNotFoundError:
+        lines.append("VRAM: nvidia-smi not found")
+    except Exception as e:
+        lines.append(f"VRAM: unavailable ({e})")
+
+    # --- Disk ---
+    try:
+        # Project directory
+        project_dir = str(config.PROJECT_ROOT)
+        disk = shutil.disk_usage(project_dir)
+        lines.append(f"Disk: {disk.used / (1024**3):.1f} / {disk.total / (1024**3):.0f} GB ({100 * disk.used // disk.total}% used)")
+
+        # Index via Qdrant
+        try:
+            qclient = QdrantClient(url=config.QDRANT_URL, timeout=3)
+            info = qclient.get_collection(config.COLLECTION_NAME)
+            lines.append(f"Qdrant index: {info.points_count} chunks ({info.vectors_count} vectors)")
+        except Exception:
+            lines.append("Qdrant index: not available")
+    except Exception as e:
+        lines.append(f"Disk: unavailable ({e})")
+
+    # --- CPU ---
+    try:
+        load1, load5, load15 = os.getloadavg()
+        cpu_count = os.cpu_count() or 1
+        lines.append(f"CPU: {load1:.1f} / {load5:.1f} / {load15:.1f} (1/5/15 min avg, {cpu_count} cores)")
+    except Exception as e:
+        lines.append(f"CPU: unavailable ({e})")
+
+    # --- Ollama models loaded ---
+    try:
+        import httpx
+        resp = httpx.get(f"{config.OLLAMA_BASE_URL}/api/ps", timeout=5)
+        if resp.status_code == 200:
+            models = resp.json().get("models", [])
+            if models:
+                model_lines = []
+                for m in models:
+                    name = m.get("name", "unknown")
+                    size_gb = m.get("size", 0) / (1024**3)
+                    model_lines.append(f"  • {name} ({size_gb:.1f} GB)")
+                lines.append("Ollama loaded models:\n" + "\n".join(model_lines))
+            else:
+                lines.append("Ollama: no models loaded")
+    except Exception:
+        lines.append("Ollama: not reachable")
+
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -163,10 +351,10 @@ def search_documents(query: str, top_k: int = 5) -> str:
     try:
         embeddings = get_embeddings()
         
-        vectorstore = Chroma(
+        vectorstore = QdrantVectorStore.from_existing_collection(
+            embedding=embeddings,
             collection_name=config.COLLECTION_NAME,
-            embedding_function=embeddings,
-            persist_directory=config.CHROMA_PERSIST_DIRECTORY
+            url=config.QDRANT_URL,
         )
 
         results = vectorstore.similarity_search_with_score(query, k=top_k)
@@ -209,10 +397,10 @@ def ask_documents(query: str) -> str:
         embeddings = get_embeddings()
         
         # Initialize Vector Store
-        vectorstore = Chroma(
+        vectorstore = QdrantVectorStore.from_existing_collection(
+            embedding=embeddings,
             collection_name=config.COLLECTION_NAME,
-            embedding_function=embeddings,
-            persist_directory=config.CHROMA_PERSIST_DIRECTORY
+            url=config.QDRANT_URL,
         )
         
         # Initialize LLM

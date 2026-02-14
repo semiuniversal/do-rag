@@ -185,22 +185,46 @@ class IndexingJob:
                 return self.errors[-1]
 
             # Run blocking I/O in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
+
+            # Attempt to unload other models to free VRAM
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(f"{config.OLLAMA_BASE_URL}/api/ps")
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = data.get("models", [])
+                        for m in models:
+                            name = m["name"]
+                            # precise check or loose check? 'nomic-embed-text' vs 'nomic-emb'
+                            # If it's NOT the embedding model, unload it.
+                            # config.EMBEDDING_MODEL might be 'nomic-embed-text'
+                            # name might be 'nomic-embed-text:latest'
+                            if config.EMBEDDING_MODEL not in name and "nomic" not in name:
+                                logging.info(f"Unloading LLM {name} to free VRAM for indexing...")
+                                await client.post(f"{config.OLLAMA_BASE_URL}/api/generate", 
+                                                json={"model": name, "keep_alive": 0})
+            except Exception as e:
+                logging.warning(f"Failed to unload other models: {e}")
 
             # Import heavy deps
             from langchain_text_splitters import RecursiveCharacterTextSplitter
-            from langchain_chroma import Chroma
+            from langchain_qdrant import QdrantVectorStore
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import Distance, VectorParams
             from llm_backend import get_embeddings
 
             embeddings = get_embeddings()
 
             # Handle reset
-            persist_dir = config.CHROMA_PERSIST_DIRECTORY
             if reset:
-                import shutil
-                if os.path.exists(persist_dir):
-                    logging.warning(f"Resetting database at {persist_dir}")
-                    shutil.rmtree(persist_dir)
+                try:
+                    client = QdrantClient(url=config.QDRANT_URL)
+                    client.delete_collection(config.COLLECTION_NAME)
+                    logging.warning(f"Deleted Qdrant collection: {config.COLLECTION_NAME}")
+                except Exception:
+                    pass  # collection may not exist yet
                 if STATE_FILE.exists():
                     STATE_FILE.unlink()
 
@@ -240,10 +264,18 @@ class IndexingJob:
             self._start_time = time.time()
 
             # Initialize vector store
-            vectorstore = Chroma(
+            # Ensure collection exists
+            client = QdrantClient(url=config.QDRANT_URL)
+            if not client.collection_exists(config.COLLECTION_NAME):
+                # Nomic embed dimension = 768
+                client.create_collection(
+                    collection_name=config.COLLECTION_NAME,
+                    vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                )
+            vectorstore = QdrantVectorStore.from_existing_collection(
+                embedding=embeddings,
                 collection_name=config.COLLECTION_NAME,
-                embedding_function=embeddings,
-                persist_directory=persist_dir,
+                url=config.QDRANT_URL,
             )
 
             # Process deletions
@@ -268,6 +300,10 @@ class IndexingJob:
                 chunk_overlap=config.CHUNK_OVERLAP,
                 separators=["\n\n", "\n", ". ", " ", ""],
             )
+
+            batch_size = getattr(config, "INDEXING_BATCH_SIZE", 10)
+            state_save_interval = 50  # save state every N files
+            files_since_save = 0
 
             for file_path in files_to_process:
                 if self._cancelled:
@@ -300,27 +336,43 @@ class IndexingJob:
                         }],
                     )
 
+                    # Generate IDs for all chunks in this file
                     file_new_ids = []
                     for j, chunk in enumerate(chunks):
                         chunk.metadata["chunk_index"] = j
                         id_str = f"{str_path}_{current_mtime}_{j}"
-                        chunk_id = hashlib.md5(id_str.encode()).hexdigest()
+                        chunk_id = hashlib.sha256(id_str.encode()).hexdigest()[:32]
                         file_new_ids.append(chunk_id)
 
-                        # Add one chunk at a time for stability
-                        await loop.run_in_executor(
-                            None,
-                            lambda docs, ids: vectorstore.add_documents(documents=docs, ids=ids),
-                            [chunk], [chunk_id],
-                        )
-
-                        # Cooldown
-                        cooldown = getattr(config, "INDEXING_COOLDOWN", 0)
-                        if cooldown > 0:
-                            await asyncio.sleep(cooldown)
+                    # Batch-add chunks to ChromaDB/Qdrant
+                    for i in range(0, len(chunks), batch_size):
+                        batch_docs = chunks[i:i + batch_size]
+                        batch_ids = file_new_ids[i:i + batch_size]
+                        
+                        # Retry logic for transient Ollama errors (EOF/500)
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    lambda d=batch_docs, ids=batch_ids: vectorstore.add_documents(
+                                        documents=d, ids=ids
+                                    ),
+                                )
+                                break  # success
+                            except Exception as e:
+                                if attempt == max_retries - 1:
+                                    raise e  # re-raise last error
+                                logging.warning(f"Batch index failed (attempt {attempt+1}/{max_retries}), retrying: {e}")
+                                await asyncio.sleep(1 * (attempt + 1))  # linear backoff
 
                     state[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
-                    _save_state(state)
+                    files_since_save += 1
+
+                    # Save state periodically, not every file
+                    if files_since_save >= state_save_interval:
+                        _save_state(state)
+                        files_since_save = 0
 
                 except Exception as e:
                     error_msg = f"Error processing {file_path.name}: {e}"
@@ -330,8 +382,10 @@ class IndexingJob:
                 self.processed_files += 1
 
             if self._cancelled:
+                _save_state(state)  # save progress before exit
                 return self.get_status_text()
 
+            _save_state(state)  # final save
             self.status = "complete"
             return self.get_status_text()
 
