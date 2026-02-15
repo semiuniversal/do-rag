@@ -34,8 +34,15 @@ echo "[4/5] Restarting MCP Server..."
 sleep 1
 ./run_mcp_server.sh start
 
-# 5. Start Open WebUI (Already handles restart)
-echo "[5/5] Starting Open WebUI..."
+# 5. Start Admin Portal
+echo "[5/6] Starting Admin Portal..."
+# Kill existing admin_server if running
+pkill -f admin_server.py || true
+nohup python3 admin_server.py > admin.log 2>&1 &
+echo "  Admin Portal running on port 5001"
+
+# 6. Start Open WebUI (Already handles restart)
+echo "[6/6] Starting Open WebUI..."
 ./run_webui.sh
 
 echo "================================"
@@ -43,4 +50,6 @@ echo "All services verified up."
 echo "Access Open WebUI at:"
 echo "  http://localhost:3000"
 echo "  http://$(hostname -I | awk '{print $1}'):3000"
+echo "Access Admin Portal at:"
+echo "  http://localhost:5001"
 echo "================================"

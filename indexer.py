@@ -34,35 +34,72 @@ def _save_state(state: Dict[str, Dict[str, Any]]):
 
 
 def _read_file_content(file_path: Path) -> str:
-    """Read content from a file, handling different encodings and types."""
-    # Handle .docx
-    if file_path.suffix.lower() == ".docx":
+    """Read content from a file using Docling for rich formats, or standard I/O for text."""
+    suffix = file_path.suffix.lower()
+    
+    # Fast path for plain text and code
+    # HTML could go either way, but Docling does infinite better job than raw read
+    if suffix in [".md", ".txt", ".py", ".js", ".json", ".sh", ".css", ".sql", ".yaml", ".yml"]:
+        encodings = ["utf-8", "latin-1", "cp1252"]
+        for encoding in encodings:
+            try:
+                with open(file_path, "r", encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                logging.warning(f"Error reading {file_path}: {e}")
+                return ""
+        return ""
+
+    # Priority: Use pypdf for PDF files to avoid docling hangs/crashes
+    content = ""
+    if file_path.suffix.lower() == ".pdf":
         try:
-            from langchain_community.document_loaders import Docx2txtLoader
-            loader = Docx2txtLoader(str(file_path))
-            docs = loader.load()
-            return "\n\n".join([d.page_content for d in docs])
+            from pypdf import PdfReader
+            logging.info(f"Using pypdf for {file_path}")
+            reader = PdfReader(file_path)
+            content = ""
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    content += text + "\n"
+            return content
         except ImportError:
-            logging.warning("docx2txt not installed, skipping .docx file")
-            return ""
+            logging.warning("pypdf not installed. Falling back to docling.")
         except Exception as e:
-            logging.warning(f"Error reading .docx {file_path}: {e}")
-            return ""
+            logging.warning(f"pypdf failed for {file_path}: {e}")
 
-    # Handle text files (.md, .txt, code, etc.)
-    encodings = ["utf-8", "latin-1", "cp1252"]
-    for encoding in encodings:
-        try:
-            with open(file_path, "r", encoding=encoding) as f:
-                return f.read()
-        except UnicodeDecodeError:
-            continue
-        except Exception as e:
-            logging.warning(f"Error reading {file_path}: {e}")
-            return ""
+    # Docling path for DOCX, PPTX, XLSX, HTML (and PDF fallback if pypdf failed)
+    try:
+        from docling.document_converter import DocumentConverter
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions, AcceleratorDevice
 
-    logging.error(f"Failed to read {file_path} with any supported encoding")
-    return ""
+        # Configure for CPU only to save VRAM for Ollama
+        accelerator_options = AcceleratorOptions(num_threads=4, device=AcceleratorDevice.CPU)
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.accelerator_options = accelerator_options
+
+        # Initialize converter
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: pipeline_options,
+                InputFormat.DOCX: pipeline_options,
+                InputFormat.PPTX: pipeline_options,
+                InputFormat.XLSX: pipeline_options,
+                InputFormat.HTML: pipeline_options
+            }
+        )
+        result = converter.convert(file_path)
+        content = result.document.export_to_markdown()
+        
+    except ImportError:
+        logging.warning("Docling not installed.")
+    except Exception as e:
+        logging.warning(f"Docling failed for {file_path}: {e}")
+
+    return content
 
 
 def _scan_files(directories: List[str], extensions: List[str], exclusions: List[str]) -> List[Path]:
@@ -217,7 +254,7 @@ class IndexingJob:
 
             embeddings = get_embeddings()
 
-            # Handle reset
+            # Handle reset or integrity check
             if reset:
                 try:
                     client = QdrantClient(url=config.QDRANT_URL)
@@ -227,6 +264,21 @@ class IndexingJob:
                     pass  # collection may not exist yet
                 if STATE_FILE.exists():
                     STATE_FILE.unlink()
+            else:
+                # Integrity Check: If state exists but Qdrant is missing/empty, force partial reset
+                try:
+                    client = QdrantClient(url=config.QDRANT_URL)
+                    try:
+                        info = client.get_collection(config.COLLECTION_NAME)
+                        if info.points_count == 0 and STATE_FILE.exists():
+                            logging.warning("Index integrity check failed: Qdrant empty but state file exists. Forcing re-index.")
+                            STATE_FILE.unlink()
+                    except Exception:
+                        logging.warning("Index integrity check failed: Qdrant collection missing. Forcing re-index.")
+                        if STATE_FILE.exists():
+                            STATE_FILE.unlink()
+                except Exception as e:
+                    logging.error(f"Failed to perform integrity check: {e}")
 
             # Scan files
             all_files = await loop.run_in_executor(

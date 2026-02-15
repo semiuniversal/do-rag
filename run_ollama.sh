@@ -41,7 +41,7 @@ check_models() {
     # Check LLM Model
     # Extract model name from config or hardcode for script simplicity if needed, 
     # but here we use a variable corresponding to config
-    LLM_MODEL="qwen2.5-coder:7b-instruct-q5_K_M"
+    LLM_MODEL="hf.co/mradermacher/Nanbeige4.1-3B-i1-GGUF:Q4_K_M"
     
     if ollama list | grep -q "$LLM_MODEL"; then
          echo "LLM model '$LLM_MODEL' found."

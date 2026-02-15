@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h2>Configuration</h2>
+    <form id="config-form">
+        <label>LLM Model</label>
+        <input type="text" id="llm_model" name="LLM_MODEL">
+
+        <label>Embedding Model</label>
+        <input type="text" id="embedding_model" name="EMBEDDING_MODEL">
+
+        <label>Ollama URL</label>
+        <input type="text" id="ollama_url" name="OLLAMA_BASE_URL">
+
+        <h3>Directories</h3>
+        <div id="dir-list"></div>
+        <div style="display: flex; gap: 0.5rem;">
+            <input type="text" id="new-dir" placeholder="/path/to/folder">
+            <button type="button" onclick="addDir()">Add</button>
+        </div>
+
+        <h3>Extensions</h3>
+        <input type="text" id="extensions" name="SUPPORTED_EXTENSIONS" placeholder=".md, .txt">
+        <small style="opacity: 0.7">Comma separated</small>
+
+        <div style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+            <button type="submit">Save Changes</button>
+            <span id="save-msg" style="margin-left: 1rem; opacity: 0; transition: opacity 0.5s;">Saved!</span>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentConfig = {};
+
+    async function loadConfig() {
+        const data = await api('/api/config');
+        currentConfig = data;
+
+        document.getElementById('llm_model').value = data.LLM_MODEL || "";
+        document.getElementById('embedding_model').value = data.EMBEDDING_MODEL || "";
+        document.getElementById('ollama_url').value = data.OLLAMA_BASE_URL || "";
+        document.getElementById('extensions').value = (data.SUPPORTED_EXTENSIONS || []).join(", ");
+
+        renderDirs();
+    }
+
+    function renderDirs() {
+        const container = document.getElementById('dir-list');
+        container.innerHTML = '';
+        (currentConfig.DOCUMENT_DIRECTORIES || []).forEach((dir, idx) => {
+            const div = document.createElement('div');
+            div.style.display = 'flex';
+            div.style.justifyContent = 'space-between';
+            div.style.marginBottom = '0.5rem';
+            div.style.background = '#222';
+            div.style.padding = '0.5rem';
+            div.style.borderRadius = '4px';
+
+            div.innerHTML = `
+            <span>${dir}</span>
+            <button type="button" style="background: var(--danger); padding: 0.2rem 0.5rem; font-size: 0.8rem;" onclick="removeDir(${idx})"> Remove </button>
+        `;
+            container.appendChild(div);
+        });
+    }
+
+    function addDir() {
+        const val = document.getElementById('new-dir').value.trim();
+        if (val) {
+            if (!currentConfig.DOCUMENT_DIRECTORIES) currentConfig.DOCUMENT_DIRECTORIES = [];
+            currentConfig.DOCUMENT_DIRECTORIES.push(val);
+            document.getElementById('new-dir').value = '';
+            renderDirs();
+        }
+    }
+
+    function removeDir(idx) {
+        if (confirm("Remove this directory from index?")) {
+            currentConfig.DOCUMENT_DIRECTORIES.splice(idx, 1);
+            renderDirs();
+        }
+    }
+
+    document.getElementById('config-form').onsubmit = async (e) => {
+        e.preventDefault();
+
+        // Gather values
+        currentConfig.LLM_MODEL = document.getElementById('llm_model').value;
+        currentConfig.EMBEDDING_MODEL = document.getElementById('embedding_model').value;
+        currentConfig.OLLAMA_BASE_URL = document.getElementById('ollama_url').value;
+
+        const exts = document.getElementById('extensions').value.split(',').map(s => s.trim().replace(/^\./, "")).filter(s => s).map(s => "." + s);
+        currentConfig.SUPPORTED_EXTENSIONS = exts;
+
+        // Save
+        const res = await api('/api/config', 'POST', currentConfig);
+        if (res.status === 'success') {
+            const msg = document.getElementById('save-msg');
+            msg.style.opacity = 1;
+            setTimeout(() => msg.style.opacity = 0, 2000);
+        } else {
+            alert("Error saving: " + res.message);
+        }
+    };
+
+    loadConfig();
+</script>
+{% endblock %}

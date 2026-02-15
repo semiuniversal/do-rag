@@ -302,12 +302,41 @@ def system_stats() -> str:
         lines.append(f"Disk: {disk.used / (1024**3):.1f} / {disk.total / (1024**3):.0f} GB ({100 * disk.used // disk.total}% used)")
 
         # Index via Qdrant
+        # Index via Qdrant
         try:
+            # Check local state file for expected count
+            from indexer import _load_state
+            state = _load_state()
+            local_count = len(state)
+            
+            # Check actual Qdrant collection
             qclient = QdrantClient(url=config.QDRANT_URL, timeout=3)
-            info = qclient.get_collection(config.COLLECTION_NAME)
-            lines.append(f"Qdrant index: {info.points_count} chunks ({info.vectors_count} vectors)")
-        except Exception:
-            lines.append("Qdrant index: not available")
+            try:
+                info = qclient.get_collection(config.COLLECTION_NAME)
+                lines.append(f"Qdrant index: {info.points_count} chunks | Local state: {local_count} files")
+                if local_count > 0 and info.points_count == 0:
+                    lines.append("WARNING: Index Integrity Mismatch! Local state has files but Qdrant is empty.")
+                    lines.append("SUGGESTION: Run 'start_indexing' with reset=True")
+            except Exception:
+                lines.append(f"Qdrant index: Collection not found | Local state: {local_count} files")
+                lines.append("WARNING: Collection missing!")
+
+            # File Distribution Analytics
+            if local_count > 0:
+                from collections import Counter
+                from pathlib import Path
+                extensions = []
+                for path_str in state.keys():
+                    ext = Path(path_str).suffix.lower() or "no_ext"
+                    extensions.append(ext)
+                
+                counts = Counter(extensions)
+                # Sort by count desc
+                dist_str = ", ".join([f"{k}: {v}" for k, v in counts.most_common()])
+                lines.append(f"Indexed Types: {dist_str}")
+
+        except Exception as e:
+            lines.append(f"Qdrant index: unavailable ({e})")
     except Exception as e:
         lines.append(f"Disk: unavailable ({e})")
 
