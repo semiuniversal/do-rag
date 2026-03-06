@@ -24,7 +24,7 @@ for model in "$EMBEDDING_MODEL" "$LLM_MODEL"; do
     fi
 done
 
-# 3. Start Qdrant (Docker)
+# 3. Start Qdrant (Podman/Docker)
 echo "[3/5] Starting Qdrant..."
 ./run_qdrant.sh start
 

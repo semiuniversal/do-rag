@@ -23,16 +23,21 @@ def _defaults() -> dict:
 def load_settings() -> dict:
     """Load settings from settings.json, falling back to config.py defaults."""
     defaults = _defaults()
+    result = dict(defaults)
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE, "r") as f:
                 overrides = json.load(f)
-            # Merge: overrides win, but only for keys we recognize OR new keys
             for key, value in overrides.items():
-                 defaults[key] = value
+                result[key] = value
         except Exception as e:
             logging.warning(f"Failed to load {SETTINGS_FILE}: {e}")
-    return defaults
+    # Normalize: Admin UI uses config schema (DOCUMENT_DIRECTORIES etc.);
+    # indexer uses canonical keys (directories, exclusions, extensions).
+    result["directories"] = result.get("directories") or result.get("DOCUMENT_DIRECTORIES") or defaults["directories"]
+    result["exclusions"] = result.get("exclusions") or result.get("IGNORED_DIRECTORIES") or defaults["exclusions"]
+    result["extensions"] = result.get("extensions") or result.get("SUPPORTED_EXTENSIONS") or defaults["extensions"]
+    return result
 
 
 def save_settings(settings: dict):

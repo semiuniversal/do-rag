@@ -35,6 +35,8 @@
         <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 0.5rem;">
             <button type="button" id="btn-start" onclick="startIndexing()" style="background: var(--accent);">Start
                 Indexing</button>
+            <button type="button" id="btn-reset" onclick="startIndexingReset()"
+                style="background: #884400;">Reset and Re-index</button>
             <button type="button" id="btn-stop" onclick="stopIndexing()"
                 style="background: var(--danger); display: none;">Stop Indexing</button>
             <span id="indexer-state" style="font-weight: bold; color: var(--secondary);">Idle</span>
@@ -113,6 +115,7 @@
     function updateControlPanel(data) {
         const stateEl = document.getElementById('indexer-state');
         const startBtn = document.getElementById('btn-start');
+        const resetBtn = document.getElementById('btn-reset');
         const stopBtn = document.getElementById('btn-stop');
         const progressBar = document.getElementById('progress-bar');
         const progressText = document.getElementById('progress-text');
@@ -126,10 +129,12 @@
         isIndexing = ["preparing", "scanning", "indexing"].includes(data.status);
         if (isIndexing) {
             startBtn.style.display = 'none';
+            if (resetBtn) resetBtn.style.display = 'none';
             stopBtn.style.display = 'inline-block';
             stateEl.style.color = 'var(--accent)';
         } else {
             startBtn.style.display = 'inline-block';
+            if (resetBtn) resetBtn.style.display = 'inline-block';
             stopBtn.style.display = 'none';
             stateEl.style.color = 'var(--secondary)';
         }
@@ -202,7 +207,14 @@
 
     async function startIndexing() {
         if (!confirm("Start indexing? This may take high CPU/RAM.")) return;
-        const res = await api('/api/indexer/start', 'POST');
+        const res = await api('/api/indexer/start', 'POST', {});
+        if (res.error) alert(res.error);
+        else refreshStatus();
+    }
+
+    async function startIndexingReset() {
+        if (!confirm("Reset and Re-index? This will ERASE the entire index and rebuild from scratch. This action cannot be undone.")) return;
+        const res = await api('/api/indexer/start', 'POST', { reset: true });
         if (res.error) alert(res.error);
         else refreshStatus();
     }

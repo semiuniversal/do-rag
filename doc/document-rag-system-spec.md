@@ -1,5 +1,7 @@
 # Local Document RAG System - Technical Specification
 
+> **Historical: ChromaDB Design** — This spec describes the original ChromaDB-based architecture. The current implementation uses **Qdrant** for vector storage, `settings.json` for configuration, and `pyproject.toml` for dependencies. See README.md for up-to-date usage.
+
 ## Project Overview
 
 Build a privacy-preserving, local document search system using Retrieval-Augmented Generation (RAG) to enable semantic search across 2+ years of markdown files, AI conversation transcripts, and project documentation.

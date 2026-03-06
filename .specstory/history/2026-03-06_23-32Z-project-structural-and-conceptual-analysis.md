@@ -174,3 +174,469 @@ Creating the analysis plan:
 
 ---
 
+_**User**_
+
+Is Flask an appropriate web server for this project? 
+
+---
+
+_**Assistant**_
+
+<think><details><summary>Thought Process</summary>**Evaluating Flask suitability**
+
+I'm analyzing whether Flask is appropriate for the admin server based on its API endpoints and admin UI requirements. Flask is suitable for the admin UI as it provides a lightweight web interface for managing indexing status, configuration, and directory browsing. Flask is appropriate for this admin UI due to its simplicity, minimal dependencies, and suitability for a low-traffic local tool. Flask's synchronous nature requires threading with its own event loop, which works for local use but isn't ideal for concurrent requests. Flask isn't ideal for concurrent requests, and the tool appears to be local-first, not production-grade. Flask is appropriate for this low-traffic, single-user admin dashboard with simple forms and polling-based status updates. </details></think>
+
+---
+
+
+Flask is a reasonable fit for this project, with some trade-offs.
+
+## Where Flask Is Used
+
+Flask runs the **Admin UI** in [admin_server.py](admin_server.py): config, directory browser, model management, and indexer start/stop. It listens on port 5001 and is used locally by a single user.
+
+## Why Flask Fits
+
+- **Scope**: Simple CRUD-style config UI, forms, and a few API routes.
+- **Traffic**: Low, local-only usage.
+- **Stack**: Uses Jinja2 templates and standard request/response patterns.
+- **Complexity**: Minimal setup and dependencies.
+
+## Trade-offs
+
+1. **Async mismatch**  
+   The indexer is async (`IndexingJob.start()`), but Flask is sync. The code runs it in a thread with `asyncio.run(job.start())`. It works but is a bit awkward.
+
+2. **Two servers**  
+   You run both the MCP server (Uvicorn) and the Admin server (Flask). You could instead serve the admin UI from the MCP server (e.g., FastAPI/Starlette) to have a single process.
+
+3. **Dev server**  
+   `app.run(..., debug=True)` is fine for local use but not for production. For a local tool, that’s usually acceptable.
+
+## Verdict
+
+Flask is appropriate for this project: it matches the simple, local admin UI and low traffic. The main downside is the async/threading workaround; if you ever consolidate services, moving the admin UI into the MCP server (FastAPI/Starlette) would give a single async stack. For the current design, Flask is a sensible choice.
+
+---
+
+_**User**_
+
+The reason I put this project on the shelf was that the local LLM seemed to require a tremendous amount of tuning and never quite generated the right expression with regard to its responses. The model selection was a result of several trials. I've decided also that we should be using Podman instead of Docker, so this would be an architectural change. Likewise, this application directory got moved from the Windows file system into the Linux file system using WSL. This should reduce latency, but we may need to re-establish the Docker containers configuration. Podman desktop is running on Windows. 
+
+---
+
+_**Assistant**_
+
+<think><details><summary>Thought Process</summary>**Shelving project**
+
+I'm shelving the project due to LLM tuning issues and architectural shift to Podman. </details></think>
+
+---
+
+
+Here’s how this affects the project and what to plan for.
+
+## LLM response quality
+
+The tuning and model trials are a common RAG issue. Answer quality usually depends on:
+
+- **Prompt design** – e.g. the template in `ask_documents` (“Answer based only on the following context…”)
+- **Retrieval quality** – `top_k`, chunk size/overlap, and embedding model
+- **Model fit** – some models follow instructions better than others
+
+If you want to revisit this later, we can focus on prompt engineering, retrieval tuning, and model choice.
+
+---
+
+## Podman instead of Docker
+
+The project uses containers for:
+
+- **Qdrant** – vector store
+- **Open WebUI** – chat UI (optional)
+
+Podman is mostly Docker-compatible. Changes needed:
+
+1. **Scripts** – `run_qdrant.sh`, `run_webui.sh`, and `run.sh` likely use `docker` commands. These should be updated to `podman` (or `podman compose`).
+2. **Networking** – Podman on Windows with WSL needs correct host/port exposure so the WSL app can reach `localhost:6333` (Qdrant) and `localhost:3000` (Open WebUI).
+3. **Compose** – If you use `docker-compose`, switch to `podman-compose` or Podman’s native compose support.
+
+---
+
+## WSL + Linux filesystem
+
+Moving the project into the WSL Linux filesystem changes:
+
+| Before (Windows FS) | After (WSL Linux FS) |
+|---------------------|----------------------|
+| Paths like `/mnt/c/Users/...` | Paths like `/home/tremw/Projects/do-rag` |
+| `optimize_for_windows` + `windows/bridge.py` | Likely unnecessary for project dir |
+| Cross-filesystem I/O | Native Linux I/O, lower latency |
+
+**Implications:**
+
+1. **`optimize_for_windows`** – Still useful if you index Windows paths (e.g. `/mnt/c/Users/...`). If everything is under `/home/`, you can probably disable it.
+2. **`settings.json` paths** – Any `DOCUMENT_DIRECTORIES` or `directories` pointing at Windows paths should be updated to Linux paths.
+3. **Container access to files** – If containers need to read project or document paths, you must bind-mount the correct WSL paths. With Podman on Windows, the mapping (Windows ↔ WSL ↔ containers) needs to be checked.
+
+---
+
+## Podman Desktop on Windows + WSL app
+
+With Podman Desktop on Windows and the app in WSL:
+
+- Containers run in the Windows Podman engine.
+- The Python app runs in WSL.
+- WSL can reach Windows `localhost` (e.g. `host.docker.internal`-style addressing), but the exact hostname/ports depend on your setup.
+
+You’ll need to confirm:
+
+- How WSL reaches Podman services (e.g. `localhost`, `host.docker.internal`, or a specific IP).
+- That `QDRANT_URL` and `OLLAMA_BASE_URL` in `config` point to the right host and ports.
+
+---
+
+## Suggested next steps
+
+1. **Podman migration** – Update run scripts and compose files for Podman; verify Qdrant and Open WebUI start and are reachable from WSL.
+2. **Path and settings** – Update `settings.json` and any hardcoded paths for the new Linux project location.
+3. **Networking** – Test connectivity from WSL to Qdrant and Ollama (and Open WebUI if used).
+4. **`optimize_for_windows`** – Decide whether you still index Windows paths; if not, you can simplify or remove that path.
+
+If you want, I can draft a concrete migration plan (step-by-step changes to scripts, config, and paths) for Podman + WSL.
+
+---
+
+_**User**_
+
+Taking into account the proposed structural analysis and the additional details, create an implementation plan. 
+Critical structural issues, broken code. 
+- Add the file system path.
+- Remove stale ChromaDB references.
+- Fix the indexer.
+- etc. 
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Creating implementation plan**
+
+I'm outlining a two-phase approach to fix the core issues: critical bug fixes first, then unifying configuration management. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+_**User**_
+
+Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself.
+
+To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+
+
+
+
+---
+
+## Todo List
+
+- [-] Fix index_docs.py reset confirmation (replace CHROMA_PERSIST_DIRECTORY)
+- [ ] Remove duplicate state assignment in indexer.py
+- [ ] Remove duplicate LLM line in templates/config.html
+- [ ] Add key aliasing in settings.py (DOCUMENT_DIRECTORIES -> directories)
+- [ ] Reload config module variables after save_settings
+- [ ] Update config.example.py for Qdrant, remove ChromaDB
+- [ ] Mark or update doc/document-rag-system-spec.md as historical
+- [ ] Remove ChromaDB references from indexer comment, .gitignore
+- [ ] Update default paths and README for WSL Linux
+- [ ] Add BACKEND to config.py defaults
+- [ ] Fix api_status indexer_running in admin_server.py
+- [ ] Add Reset and Re-index option to Admin UI
+- [ ] Derive embedding dimension at runtime in indexer
+- [ ] Update run_qdrant.sh and run_webui.sh for Podman
+- [ ] Update README and run.sh for Podman
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+## Todo List
+
+- [x] Fix index_docs.py reset confirmation (replace CHROMA_PERSIST_DIRECTORY)
+- [-] Remove duplicate state assignment in indexer.py
+- [ ] Remove duplicate LLM line in templates/config.html
+- [ ] Add key aliasing in settings.py (DOCUMENT_DIRECTORIES -> directories)
+- [ ] Reload config module variables after save_settings
+- [ ] Update config.example.py for Qdrant, remove ChromaDB
+- [ ] Mark or update doc/document-rag-system-spec.md as historical
+- [ ] Remove ChromaDB references from indexer comment, .gitignore
+- [ ] Update default paths and README for WSL Linux
+- [ ] Add BACKEND to config.py defaults
+- [ ] Fix api_status indexer_running in admin_server.py
+- [ ] Add Reset and Re-index option to Admin UI
+- [ ] Derive embedding dimension at runtime in indexer
+- [ ] Update run_qdrant.sh and run_webui.sh for Podman
+- [ ] Update README and run.sh for Podman
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+## Todo List
+
+- [x] Fix index_docs.py reset confirmation (replace CHROMA_PERSIST_DIRECTORY)
+- [x] Remove duplicate state assignment in indexer.py
+- [-] Remove duplicate LLM line in templates/config.html
+- [ ] Add key aliasing in settings.py (DOCUMENT_DIRECTORIES -> directories)
+- [ ] Reload config module variables after save_settings
+- [ ] Update config.example.py for Qdrant, remove ChromaDB
+- [ ] Mark or update doc/document-rag-system-spec.md as historical
+- [ ] Remove ChromaDB references from indexer comment, .gitignore
+- [ ] Update default paths and README for WSL Linux
+- [ ] Add BACKEND to config.py defaults
+- [ ] Fix api_status indexer_running in admin_server.py
+- [ ] Add Reset and Re-index option to Admin UI
+- [ ] Derive embedding dimension at runtime in indexer
+- [ ] Update run_qdrant.sh and run_webui.sh for Podman
+- [ ] Update README and run.sh for Podman
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+## Todo List
+
+- [x] Fix index_docs.py reset confirmation (replace CHROMA_PERSIST_DIRECTORY)
+- [x] Remove duplicate state assignment in indexer.py
+- [x] Remove duplicate LLM line in templates/config.html
+- [-] Add key aliasing in settings.py (DOCUMENT_DIRECTORIES -> directories)
+- [ ] Reload config module variables after save_settings
+- [ ] Update config.example.py for Qdrant, remove ChromaDB
+- [ ] Mark or update doc/document-rag-system-spec.md as historical
+- [ ] Remove ChromaDB references from indexer comment, .gitignore
+- [ ] Update default paths and README for WSL Linux
+- [ ] Add BACKEND to config.py defaults
+- [ ] Fix api_status indexer_running in admin_server.py
+- [ ] Add Reset and Re-index option to Admin UI
+- [ ] Derive embedding dimension at runtime in indexer
+- [ ] Update run_qdrant.sh and run_webui.sh for Podman
+- [ ] Update README and run.sh for Podman
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Adding key aliasing**
+
+I'm implementing key aliasing in load_settings to support deprecated config keys. I'm implementing the normalization flow to handle key aliasing by preferring canonical keys over deprecated ones. I'm adjusting the normalization logic to properly handle key aliasing for directories by prioritizing canonical over deprecated keys. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Handling canonical keys**
+
+I need to ensure save_settings writes canonical keys when called from mutators like add_directory. I'm ensuring save_settings writes canonical keys when called from mutators like add_directory. </details></think>
+
+---
+

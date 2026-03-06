@@ -1,23 +1,21 @@
 # config.example.py
-# Copy this file to 'config.py' and update with your local paths.
+# Template for settings.json structure. The main config loads from settings.json.
+# This file documents the expected keys. Copy to config.py only if using legacy Python config.
 
-import os
 from pathlib import Path
 
-# Document directories to index
-DOCUMENT_DIRECTORIES = [
-    # Windows paths (WSL)
-    # "/mnt/c/Users/username/Documents",
-    
-    # macOS paths
-    # "/Users/username/Documents",
+PROJECT_ROOT = Path(__file__).parent.absolute()
 
-    # Linux paths
-    # "/home/username/documents",
+# Document directories to index (use absolute paths)
+DOCUMENT_DIRECTORIES = [
+    str(PROJECT_ROOT / "test_docs"),
+    # "/home/username/Projects",      # WSL Linux (recommended)
+    # "/home/username/Documents",
+    # "/mnt/c/Users/username/Documents",  # Windows via WSL mount
 ]
 
 # File extensions to process
-SUPPORTED_EXTENSIONS = ['.md', '.txt', '.docx']
+SUPPORTED_EXTENSIONS = ['.md', '.txt', '.docx', '.pdf', '.pptx', '.xlsx', '.html']
 
 # LLM Backend: "ollama" or "lm_studio"
 BACKEND = "ollama"
@@ -30,12 +28,11 @@ LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
 
 # Model names (used by both backends — make sure these are loaded/pulled)
 EMBEDDING_MODEL = "nomic-embed-text"
-LLM_MODEL = "qwen2.5-coder:7b-instruct-q5_K_M"
+LLM_MODEL = "qwen2.5:14b"
 
-# ChromaDB configuration
-PROJECT_ROOT = Path(__file__).parent.absolute()
-CHROMA_PERSIST_DIRECTORY = str(PROJECT_ROOT / "chroma_db")
-COLLECTION_NAME = "documents"
+# Qdrant vector database
+QDRANT_URL = "http://localhost:6333"
+COLLECTION_NAME = "do_rag"
 
 # Chunking configuration
 CHUNK_SIZE = 1000  # characters per chunk

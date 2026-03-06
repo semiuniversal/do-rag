@@ -15,11 +15,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Indexer Integration ---
 indexer_thread = None
 
-def run_indexer_job():
+def run_indexer_job(reset: bool = False):
     """Runs the indexing job in a separate thread with its own event loop."""
     job = indexer.get_current_job()
     try:
-        asyncio.run(job.start())
+        asyncio.run(job.start(reset=reset))
     except Exception as e:
         logging.error(f"Indexer thread failed: {e}")
 
@@ -84,7 +84,7 @@ def api_status():
     return jsonify({
         "total_files": total_files,
         "indexed_files": indexed_files,
-        "indexer_running": False # TODO: check real status if possible
+        "indexer_running": indexer.get_current_job().status in ("preparing", "scanning", "indexing"),
     })
 
 @app.route("/api/config", methods=["GET", "POST"])
@@ -211,12 +211,15 @@ def api_indexer_start():
     
     if job.status in ("preparing", "scanning", "indexing"):
         return jsonify({"error": "Indexing already in progress"}), 400
-        
-    # Start in background thread
-    indexer_thread = threading.Thread(target=run_indexer_job, daemon=True)
+
+    reset = False
+    if request.json:
+        reset = request.json.get("reset", False)
+
+    indexer_thread = threading.Thread(target=run_indexer_job, args=(reset,), daemon=True)
     indexer_thread.start()
-    
-    return jsonify({"status": "started"})
+
+    return jsonify({"status": "started", "reset": reset})
 
 @app.route("/api/indexer/stop", methods=["POST"])
 def api_indexer_stop():

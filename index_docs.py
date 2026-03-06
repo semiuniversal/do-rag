@@ -45,7 +45,7 @@ def main():
 
     if args.reset and not args.force:
         import config
-        print(f"\n⚠️  WARNING: You are about to ERASE the entire index at: {config.CHROMA_PERSIST_DIRECTORY}")
+        print(f"\n⚠️  WARNING: You are about to ERASE the entire index (Qdrant collection '{config.COLLECTION_NAME}' and indexing state).")
         print("This action cannot be undone.")
         confirm = input("Are you sure you want to continue? [y/N]: ")
         if confirm.lower() != "y":

@@ -452,10 +452,13 @@ class IndexingJob:
             # Ensure collection exists
             client = QdrantClient(url=config.QDRANT_URL)
             if not client.collection_exists(config.COLLECTION_NAME):
-                # Nomic embed dimension = 768
+                # Derive embedding dimension from model at runtime
+                test_vector = await loop.run_in_executor(None, lambda: embeddings.embed_query("test"))
+                vector_size = len(test_vector)
+                logging.info(f"Creating Qdrant collection with vector size {vector_size} (from {config.EMBEDDING_MODEL})")
                 client.create_collection(
                     collection_name=config.COLLECTION_NAME,
-                    vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
                 )
             vectorstore = QdrantVectorStore.from_existing_collection(
                 embedding=embeddings,
@@ -529,7 +532,7 @@ class IndexingJob:
                         chunk_id = hashlib.sha256(id_str.encode()).hexdigest()[:32]
                         file_new_ids.append(chunk_id)
 
-                    # Batch-add chunks to ChromaDB/Qdrant
+                    # Batch-add chunks to Qdrant
                     # Adaptive Batching: Try desired batch size, split on failure
                     target_batch_size = getattr(config, "INDEXING_BATCH_SIZE", 10)
                     chunk_limit = getattr(config, "INDEXING_MAX_BATCH_TOKENS", 8000)
@@ -602,9 +605,6 @@ class IndexingJob:
                         batch_ids = file_new_ids[i:i + target_batch_size]
                         
                         await _adaptive_embed(batch_docs, batch_ids)
-
-                    state[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
-                    files_since_save += 1
 
                     state[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
                     files_since_save += 1

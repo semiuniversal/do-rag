@@ -6,7 +6,7 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
 
 - **Local & Private**: Runs entirely on your machine — no data leaves your system.
 - **Incremental Indexing**: Only processes new or modified files.
-- **Robust Vector Search**: Uses Qdrant (Docker) for high-performance, crash-resilient vector storage.
+- **Robust Vector Search**: Uses Qdrant (Podman/Docker) for high-performance, crash-resilient vector storage.
 - **MCP Server**: Exposes search tools via the [Model Context Protocol](https://modelcontextprotocol.io/) with dual transport support:
   - **Streamable HTTP** at `/mcp` — for Open WebUI and other HTTP-based clients
   - **SSE** at `/sse-transport/sse` — for IDEs (LM Studio, Claude Desktop, etc.)
@@ -17,7 +17,7 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
 ```
 ┌──────────────┐     ┌──────────────────┐     ┌───────────┐
 │  Open WebUI  │────▶│   MCP Server     │────▶│  Qdrant   │
-│  (Docker)    │     │  (server.py)     │     │ (Docker)  │
+│  (Podman)    │     │  (server.py)     │     │ (Podman)  │
 │  :3000       │     │  :8000           │     │ :6333     │
 └──────────────┘     │                  │     └───────────┘
                      │  Streamable HTTP │           │
@@ -36,7 +36,7 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
    ollama pull qwen2.5-coder:7b-instruct-q5_K_M   # or your preferred LLM
    ```
 3. **Python & uv**: This project uses [`uv`](https://docs.astral.sh/uv/) for dependency management.
-4. **Docker**: Required for Open WebUI.
+4. **Podman or Docker**: Required for Qdrant and Open WebUI. Scripts prefer Podman when available; use `CONTAINER_CMD=docker ./run.sh` to force Docker.
 
 ## Installation
 
@@ -46,21 +46,18 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
    uv sync
    ```
 3. **Configure Paths**:
-   Copy `config.example.py` to `config.py` and edit it:
-   ```bash
-   cp config.example.py config.py
-   ```
-   Set your document directories and review the supported file types:
-   ```python
-   DOCUMENT_DIRECTORIES = [
-       "/mnt/c/Users/yourname/Documents",
-       "/mnt/c/Users/yourname/Projects"
-   ]
-
-   SUPPORTED_EXTENSIONS = ['.md', '.txt', '.docx']
+   Set your document directories via the Admin UI at http://localhost:5001/config after starting services, or create `settings.json` in the project root:
+   ```json
+   {
+     "DOCUMENT_DIRECTORIES": [
+       "/home/yourname/Projects",
+       "/home/yourname/Documents"
+     ],
+     "SUPPORTED_EXTENSIONS": [".md", ".txt", ".docx"]
+   }
    ```
 
-   > **Important**: Add all directories you want searchable. The indexer will recursively scan these paths. Use absolute paths — on WSL, Windows drives are mounted under `/mnt/c/`, `/mnt/d/`, etc.
+   > **Important**: Add all directories you want searchable. Use absolute paths. On WSL Linux, prefer `/home/...` paths for lower latency. Windows drives are mounted under `/mnt/c/`, `/mnt/d/`, etc.
 
 ## Quick Start
 
@@ -146,7 +143,7 @@ This runs Open WebUI as a Docker container at **http://localhost:3000**.
    | Setting | Value |
    |---------|-------|
    | **Type** | MCP (Streamable HTTP) |
-   | **URL** | `http://host.docker.internal:8000/mcp` |
+   | **URL** | `http://host.containers.internal:8000/mcp` (Podman) or `http://host.docker.internal:8000/mcp` (Docker) |
    | **Auth Type** | None |
    | **ID** | `do-rag` |
    | **Name** | `Local RAG Search` |
@@ -204,7 +201,7 @@ For `stdio` mode (direct process spawning), use:
 | `run_ollama.sh` | Manage Ollama (`start`/`stop`/`status`/`restart`) |
 | `run_qdrant.sh` | Manage Qdrant (`start`/`stop`/`status`) |
 | `run_mcp_server.sh` | Manage MCP server (`start`/`stop`/`status`/`logs`) |
-| `run_webui.sh` | Start/restart Open WebUI Docker container |
+| `run_webui.sh` | Start/restart Open WebUI container (Podman/Docker) |
 
 Logs are saved to `*.log` files in the project root:
 - `ollama_server.log` — Ollama output
@@ -212,7 +209,7 @@ Logs are saved to `*.log` files in the project root:
 
 ## Configuration
 
-Edit `config.py` (copied from `config.example.py`):
+Configuration is loaded from `settings.json` (or Admin UI at http://localhost:5001/config). Key settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -238,8 +235,11 @@ Check the logs: `./run_mcp_server.sh logs`
 ### Open WebUI shows "Failed to connect to MCP server"
 - Ensure the MCP server is running: `./run_mcp_server.sh status`
 - Verify the **Auth Type** is set to **None** (not Bearer) in the tool server config.
-- Check that the URL uses `host.docker.internal` (not `localhost`) since Open WebUI runs in Docker.
+- Check that the URL uses `host.containers.internal` (Podman) or `host.docker.internal` (Docker) since Open WebUI runs in a container.
 
 ### Ollama connection errors
 - Ensure Ollama is running: `./run_ollama.sh status`
 - Verify the required models are pulled: `ollama list`
+
+### Migrated from Windows to WSL Linux
+If you moved the project from the Windows filesystem to the WSL Linux filesystem, update `settings.json` (or Admin UI config) to use Linux paths. Replace `/mnt/c/Users/...` with `/home/username/...` for documents now under the Linux filesystem. Prefer Linux paths for lower I/O latency.
