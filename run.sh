@@ -36,9 +36,12 @@ sleep 1
 
 # 5. Start Admin Portal
 echo "[5/6] Starting Admin Portal..."
-# Kill existing admin_server if running
+# Kill existing admin_server and clear port 5001
+echo "  Stopping existing admin processes..."
 pkill -f admin_server.py || true
-nohup python3 admin_server.py > admin.log 2>&1 &
+fuser -k 5001/tcp > /dev/null 2>&1 || true
+sleep 1
+nohup uv run python3 admin_server.py > admin.log 2>&1 &
 echo "  Admin Portal running on port 5001"
 
 # 6. Start Open WebUI (Already handles restart)

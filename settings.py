@@ -16,6 +16,7 @@ def _defaults() -> dict:
         "directories": getattr(config, "DOCUMENT_DIRECTORIES", []),
         "exclusions": getattr(config, "IGNORED_DIRECTORIES", []),
         "extensions": getattr(config, "SUPPORTED_EXTENSIONS", [".md", ".txt"]),
+        "optimize_for_windows": False,
     }
 
 
@@ -26,10 +27,9 @@ def load_settings() -> dict:
         try:
             with open(SETTINGS_FILE, "r") as f:
                 overrides = json.load(f)
-            # Merge: overrides win, but only for keys we recognize
-            for key in defaults:
-                if key in overrides:
-                    defaults[key] = overrides[key]
+            # Merge: overrides win, but only for keys we recognize OR new keys
+            for key, value in overrides.items():
+                 defaults[key] = value
         except Exception as e:
             logging.warning(f"Failed to load {SETTINGS_FILE}: {e}")
     return defaults

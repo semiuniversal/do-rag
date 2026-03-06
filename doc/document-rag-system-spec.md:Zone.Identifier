@@ -1,0 +1,4 @@
+[ZoneTransfer]
+ZoneId=3
+ReferrerUrl=https://claude.ai/chat/5a0e0aee-7fdb-42a4-9443-01019be19b92
+HostUrl=https://claude.ai/api/organizations/5d48f969-41f5-468c-9247-d02278d9d4db/conversations/5a0e0aee-7fdb-42a4-9443-01019be19b92/wiggle/download-file?path=%2Fmnt%2Fuser-data%2Foutputs%2Fdocument-rag-system-spec.md

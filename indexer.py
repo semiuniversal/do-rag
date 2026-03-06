@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import config
 import settings as settings_module
@@ -102,37 +102,145 @@ def _read_file_content(file_path: Path) -> str:
     return content
 
 
-def _scan_files(directories: List[str], extensions: List[str], exclusions: List[str]) -> List[Path]:
-    """Recursively find all files with matching extensions, respecting exclusions."""
-    files = []
-    for directory in directories:
-        path = Path(directory)
-        if not path.exists():
-            logging.warning(f"Directory not found: {directory}")
-            continue
+def _scan_files(directories: List[str], extensions: List[str], exclusions: List[str]) -> List[Tuple[Path, float]]:
+    """Recursively find all files with matching extensions, respecting exclusions.
+    Returns list of (Path, mtime) tuples.
+    """
+    files: List[Tuple[Path, float]] = []
+    
+    # Pre-process exclusions for faster lookup
+    # sets are faster than lists
+    exclude_names = set(exclusions)
+    
+    # Create a thread pool for parallel scanning
+    # Limit max workers to avoid excessive threads, but enough to cover I/O latency
+    import concurrent.futures
+    
+    # Check for Windows Optimization
+    user_settings = settings_module.load_settings()
+    if user_settings.get("optimize_for_windows", False):
+         try:
+             import windows.bridge as win_bridge
+             logging.info("Attempting Windows Native Scan...")
+             bridge_files = win_bridge.scan_windows(directories, extensions, list(exclude_names))
+             if bridge_files is not None:
+                 logging.info(f"Windows Native Scan successful: {len(bridge_files)} files.")
+                 return bridge_files
+             else:
+                 logging.warning("Windows Native Scan returned None, falling back to parallel scan.")
+         except Exception as e:
+             logging.error(f"Failed to use Windows Native Scan: {e}")
 
-        for root, dirs, filenames in os.walk(path):
-            # Prune excluded and hidden directories in-place
-            dirs[:] = [d for d in dirs if d not in exclusions and not d.startswith(".")]
+    max_workers = min(32, (os.cpu_count() or 1) * 4) 
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Map of future -> directory path
+        futures = {}
+        
+        # Helper to submit a directory scan task
+        def submit_scan(dir_path: Path):
+            return executor.submit(_scan_directory_task, dir_path, exclude_names, extensions)
 
-            if any(part.startswith(".") for part in Path(root).parts):
+        # Initial submissions
+        for directory in directories:
+            path = Path(directory)
+            if not path.exists():
+                logging.warning(f"Directory not found: {directory}")
                 continue
-
-            for filename in filenames:
-                if filename.startswith("."):
-                    continue
-                file_path = Path(root) / filename
-                if file_path.suffix.lower() in extensions:
-                    files.append(file_path)
+            futures[submit_scan(path)] = path
+            
+        while futures:
+            # Wait for any future to complete
+            done, _ = concurrent.futures.wait(futures, return_when=concurrent.futures.FIRST_COMPLETED)
+            
+            for future in done:
+                path = futures.pop(future)
+                try:
+                    result_files, result_subdirs = future.result()
+                    files.extend(result_files)
+                    
+                    # Submit subdirectories
+                    for subdir in result_subdirs:
+                         futures[submit_scan(subdir)] = subdir
+                         
+                except Exception as e:
+                    logging.warning(f"Error scanning {path}: {e}")
 
     return files
 
+def _scan_directory_task(path: Path, exclude_names: set, extensions: List[str]) -> Tuple[List[Tuple[Path, float]], List[Path]]:
+    """
+    Scans a single directory. Returns (files, subdirectories).
+    Executed in a thread pool.
+    """
+    local_files = []
+    subdirs = []
+    try:
+        with os.scandir(path) as it:
+            # Consume iterator
+            entries = list(it)
+            
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                
+                if entry.is_dir():
+                    if entry.name not in exclude_names:
+                        subdirs.append(Path(entry.path))
+                    continue
+
+                # File processing
+                if (entry.name.endswith(".log") or 
+                    entry.name.endswith(".log.txt") or 
+                    "_logs" in entry.name or 
+                    entry.name.startswith("log-")):
+                    continue
+
+                _, ext = os.path.splitext(entry.name)
+                if ext.lower() not in extensions:
+                        continue
+
+                try:
+                    stat = entry.stat()
+                    if stat.st_size > 5 * 1024 * 1024:
+                            continue
+                            
+                    local_files.append((Path(entry.path), stat.st_mtime))
+                except OSError:
+                    pass
+                    
+    except OSError as e:
+        # Don't log here to avoid thread contention on logging lock? 
+        # Or just let the main thread handle exception?
+        # Re-raising allows main loop to log associated with path
+        raise e
+        
+    return local_files, subdirs
+
+
+def unload_llm():
+    """Explicitly unload the chat model to free VRAM for embeddings."""
+    try:
+        import requests
+        import config
+        # Use simple requests to avoid circular dependencies or complex client init
+        # Payload keep_alive: 0 triggers unload
+        model = config.LLM_MODEL
+        logging.info(f"Unloading LLM {model} to free VRAM...")
+        try:
+             # Try /api/generate (for older ollama) or /api/chat
+             requests.post(f"{config.OLLAMA_BASE_URL}/api/generate", 
+                           json={"model": model, "keep_alive": 0}, timeout=2)
+        except Exception:
+             pass
+    except Exception as e:
+        logging.warning(f"Failed to unload LLM: {e}")
 
 class IndexingJob:
     """Manages a single indexing run with progress tracking and cancellation."""
 
     def __init__(self):
-        self.status: str = "idle"  # idle | scanning | indexing | complete | cancelled | error
+        self.status: str = "idle"  # idle | preparing | scanning | indexing | complete | cancelled | error
         self.total_files: int = 0
         self.files_to_process: int = 0
         self.processed_files: int = 0
@@ -140,11 +248,12 @@ class IndexingJob:
         self.errors: List[str] = []
         self.files_deleted: int = 0
         self._cancelled: bool = False
+        self.detail_status: str = ""  # Granular status message (e.g. "Loading models...")
         self._start_time: Optional[float] = None
 
     def cancel(self):
         """Request cancellation of the current job."""
-        if self.status in ("scanning", "indexing"):
+        if self.status in ("preparing", "scanning", "indexing"):
             self._cancelled = True
             self.status = "cancelled"
 
@@ -158,6 +267,7 @@ class IndexingJob:
             "current_file": self.current_file,
             "errors": len(self.errors),
             "files_deleted": self.files_deleted,
+            "detail_status": self.detail_status,
         }
         if self._start_time and self.status == "indexing" and self.files_to_process > 0:
             elapsed = time.time() - self._start_time
@@ -198,7 +308,7 @@ class IndexingJob:
 
     async def start(self, reset: bool = False) -> str:
         """Run the indexing job. Returns a summary string when done."""
-        if self.status in ("scanning", "indexing"):
+        if self.status in ("preparing", "scanning", "indexing"):
             return "An indexing job is already running. Use stop_indexing() first."
 
         self._cancelled = False
@@ -208,7 +318,9 @@ class IndexingJob:
         self.current_file = ""
 
         try:
-            self.status = "scanning"
+            self.status = "preparing"
+            self.detail_status = "Loading settings..."
+            logging.info("Indexing job started: Preparing...")
 
             # Load settings
             user_settings = settings_module.load_settings()
@@ -226,6 +338,7 @@ class IndexingJob:
 
             # Attempt to unload other models to free VRAM
             try:
+                self.detail_status = "Checking active models..."
                 import httpx
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(f"{config.OLLAMA_BASE_URL}/api/ps")
@@ -239,6 +352,7 @@ class IndexingJob:
                             # config.EMBEDDING_MODEL might be 'nomic-embed-text'
                             # name might be 'nomic-embed-text:latest'
                             if config.EMBEDDING_MODEL not in name and "nomic" not in name:
+                                self.detail_status = f"Unloading LLM {name}..."
                                 logging.info(f"Unloading LLM {name} to free VRAM for indexing...")
                                 await client.post(f"{config.OLLAMA_BASE_URL}/api/generate", 
                                                 json={"model": name, "keep_alive": 0})
@@ -246,15 +360,25 @@ class IndexingJob:
                 logging.warning(f"Failed to unload other models: {e}")
 
             # Import heavy deps
+            self.detail_status = "Importing heavy libraries (LangChain, Qdrant)..."
             from langchain_text_splitters import RecursiveCharacterTextSplitter
             from langchain_qdrant import QdrantVectorStore
             from qdrant_client import QdrantClient
             from qdrant_client.models import Distance, VectorParams
             from llm_backend import get_embeddings
 
+            # Unload LLM to prevent VRAM contention
+            self.detail_status = "Unloading Chat LLM..."
+            unload_llm()
+
+            self.detail_status = "Initializing Embeddings..."
             embeddings = get_embeddings()
+            if hasattr(embeddings, "base_url"):
+                 logging.info(f"Indexer using embedding base_url: {embeddings.base_url}")
+
 
             # Handle reset or integrity check
+            self.detail_status = "Checking Index Integrity..."
             if reset:
                 try:
                     client = QdrantClient(url=config.QDRANT_URL)
@@ -281,9 +405,16 @@ class IndexingJob:
                     logging.error(f"Failed to perform integrity check: {e}")
 
             # Scan files
+            self.status = "scanning"
+            self.detail_status = "Scanning files..."
+            scan_start = time.time()
+            logging.info("Starting file scan...")
             all_files = await loop.run_in_executor(
                 None, _scan_files, directories, extensions, exclusions
             )
+            scan_duration = time.time() - scan_start
+            logging.info(f"File scan completed in {scan_duration:.4f}s. Found {len(all_files)} files.")
+            
             self.total_files = len(all_files)
 
             if self._cancelled:
@@ -294,11 +425,11 @@ class IndexingJob:
             files_to_process = []
             files_seen = set()
 
-            for file_path in all_files:
+            for file_path, mtime in all_files:
                 str_path = str(file_path)
                 files_seen.add(str_path)
                 try:
-                    mtime = os.path.getmtime(file_path)
+                    # mtime is already retrieved from scan
                     if str_path not in state or state[str_path].get("mtime") != mtime:
                         files_to_process.append(file_path)
                 except OSError:
@@ -309,11 +440,13 @@ class IndexingJob:
             self.files_to_process = len(files_to_process)
 
             if not files_to_process and not files_to_delete:
+                _save_state(state)  # Update state timestamp to acknowledge current settings
                 self.status = "complete"
                 return f"No changes detected. Index is up to date ({self.total_files} files)."
 
             self.status = "indexing"
-            self._start_time = time.time()
+            logging.info(f"Starting indexing of {self.files_to_process} files (modified or new).")
+            # _start_time is already set above
 
             # Initialize vector store
             # Ensure collection exists
@@ -397,26 +530,81 @@ class IndexingJob:
                         file_new_ids.append(chunk_id)
 
                     # Batch-add chunks to ChromaDB/Qdrant
-                    for i in range(0, len(chunks), batch_size):
-                        batch_docs = chunks[i:i + batch_size]
-                        batch_ids = file_new_ids[i:i + batch_size]
+                    # Adaptive Batching: Try desired batch size, split on failure
+                    target_batch_size = getattr(config, "INDEXING_BATCH_SIZE", 10)
+                    chunk_limit = getattr(config, "INDEXING_MAX_BATCH_TOKENS", 8000)
+
+                    # Helper function for recursive adaptive batching
+                    async def _adaptive_embed(docs_subset, ids_subset, depth=0):
+                        if not docs_subset:
+                            return
+
+                        # 1. Check character limit first (simple heuristic for tokens)
+                        total_chars = sum(len(d.page_content) for d in docs_subset)
+                        # If over limit and we have more than 1 item, split immediately
+                        if total_chars > chunk_limit and len(docs_subset) > 1:
+                            mid = len(docs_subset) // 2
+                            await _adaptive_embed(docs_subset[:mid], ids_subset[:mid], depth+1)
+                            await _adaptive_embed(docs_subset[mid:], ids_subset[mid:], depth+1)
+                            return
+
+                        # 2. Try to embed current batch
+                        try:
+                            # Small delay before every request to be kind to the LLM
+                            batch_delay = getattr(config, "INDEXING_DELAY", 0.1)
+                            if batch_delay > 0:
+                                await asyncio.sleep(batch_delay)
+
+                            await loop.run_in_executor(
+                                None,
+                                lambda d=docs_subset, ids=ids_subset: vectorstore.add_documents(
+                                    documents=d, ids=ids
+                                ),
+                            )
+                            # Success!
+                            return 
+
+                        except Exception as e:
+                            err_msg = str(e)
+                            # If batch size is 1, we can't split further. Retrying with backoff is the only option.
+                            if len(docs_subset) == 1:
+                                if "EOF" in err_msg or "500" in err_msg or "Connection refused" in err_msg:
+                                    # Serious error on single item -> Backoff retry
+                                    max_retries = 3
+                                    for attempt in range(max_retries):
+                                        wait_time = 2 * (2 ** attempt) # 2, 4, 8
+                                        logging.warning(f"Single item embedding failed (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s: {e}")
+                                        await asyncio.sleep(wait_time)
+                                        try:
+                                            await loop.run_in_executor(
+                                                None,
+                                                lambda d=docs_subset, ids=ids_subset: vectorstore.add_documents(
+                                                    documents=d, ids=ids
+                                                ),
+                                            )
+                                            return # Success on retry
+                                        except Exception as final_e:
+                                            if attempt == max_retries - 1:
+                                                raise final_e
+                                else:
+                                    raise e
+                            else:
+                                # Batch > 1 failed -> Split and recurse (Divide and Conquer)
+                                logging.warning(f"Batch of {len(docs_subset)} items failed (chars={total_chars}). Splitting and retrying...")
+                                mid = len(docs_subset) // 2
+                                await _adaptive_embed(docs_subset[:mid], ids_subset[:mid], depth+1)
+                                await _adaptive_embed(docs_subset[mid:], ids_subset[mid:], depth+1)
+
+                    # Execute adaptive batching for the whole file's chunks
+                    # We still chunk the initial loop by target_batch_size to avoid passing 1000 items to recursion start
+                    for i in range(0, len(chunks), target_batch_size):
+                        batch_docs = chunks[i:i + target_batch_size]
+                        batch_ids = file_new_ids[i:i + target_batch_size]
                         
-                        # Retry logic for transient Ollama errors (EOF/500)
-                        max_retries = 3
-                        for attempt in range(max_retries):
-                            try:
-                                await loop.run_in_executor(
-                                    None,
-                                    lambda d=batch_docs, ids=batch_ids: vectorstore.add_documents(
-                                        documents=d, ids=ids
-                                    ),
-                                )
-                                break  # success
-                            except Exception as e:
-                                if attempt == max_retries - 1:
-                                    raise e  # re-raise last error
-                                logging.warning(f"Batch index failed (attempt {attempt+1}/{max_retries}), retrying: {e}")
-                                await asyncio.sleep(1 * (attempt + 1))  # linear backoff
+                        await _adaptive_embed(batch_docs, batch_ids)
+
+                    state[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
+                    files_since_save += 1
 
                     state[str_path] = {"mtime": current_mtime, "chunk_ids": file_new_ids}
                     files_since_save += 1
@@ -425,6 +613,8 @@ class IndexingJob:
                     if files_since_save >= state_save_interval:
                         _save_state(state)
                         files_since_save = 0
+
+
 
                 except Exception as e:
                     error_msg = f"Error processing {file_path.name}: {e}"

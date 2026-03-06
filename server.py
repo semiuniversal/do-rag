@@ -49,49 +49,25 @@ _indexing_task = None  # holds the background asyncio.Task
 @mcp.tool()
 async def start_indexing(reset: bool = False) -> str:
     """
-    Start indexing documents in the background.
-    Scans configured directories and indexes new or modified files.
-    Set reset=True to clear the index and re-index everything.
+    Start indexing documents.
     """
-    global _indexing_task
-    job = get_current_job()
-
-    if job.status in ("scanning", "indexing"):
-        return f"Indexing is already running. {job.get_status_text()}"
-
-    # Create a fresh job
-    from indexer import _current_job
-    import indexer
-    indexer._current_job = IndexingJob()
-    job = indexer._current_job
-
-    _indexing_task = asyncio.create_task(job.start(reset=reset))
-    # Give it a moment to start scanning
-    await asyncio.sleep(0.5)
-    return job.get_status_text()
+    return "Please visit the Admin interface at http://localhost:5001 to manage indexing."
 
 
 @mcp.tool()
 async def get_indexing_status() -> str:
     """
     Get the current status of the indexing job.
-    Shows progress, current file, ETA, and error count.
     """
-    job = get_current_job()
-    return job.get_status_text()
+    return "Please visit the Admin interface at http://localhost:5001 to check indexing status."
 
 
 @mcp.tool()
 async def stop_indexing() -> str:
     """
     Stop the currently running indexing job.
-    Already-indexed files are kept in the index.
     """
-    job = get_current_job()
-    if job.status not in ("scanning", "indexing"):
-        return "No indexing job is currently running."
-    job.cancel()
-    return "Indexing cancelled. " + job.get_status_text()
+    return "Please visit the Admin interface at http://localhost:5001 to manage indexing."
 
 
 @mcp.tool()
@@ -202,7 +178,7 @@ def clear_index(confirm: bool = False) -> str:
         STATE_FILE.unlink()
         cleared.append("indexing state")
 
-    return f"Index cleared ({', '.join(cleared)}). {file_count} files and {point_count} chunks removed. Run start_indexing() to rebuild."
+    return f"Index cleared ({', '.join(cleared)}). {file_count} files and {point_count} chunks removed. Please visit the Admin interface at http://localhost:5001 to rebuild."
 
 
 @mcp.tool()
@@ -226,7 +202,7 @@ def show_index_stats() -> str:
     if not STATE_FILE.exists():
         if qdrant_chunks > 0:
             return f"Qdrant has {qdrant_chunks} chunks but no state file. Consider re-indexing."
-        return "No index found. Run start_indexing() to create one."
+        return "No index found. Please visit the Admin interface at http://localhost:5001 to create one."
 
     try:
         with open(STATE_FILE, "r") as f:
@@ -235,7 +211,7 @@ def show_index_stats() -> str:
         return f"Error reading index state: {e}"
 
     if not state:
-        return "Index is empty. Run start_indexing() to index documents."
+        return "Index is empty. Please visit the Admin interface at http://localhost:5001 to index documents."
 
     total_files = len(state)
 
@@ -316,7 +292,7 @@ def system_stats() -> str:
                 lines.append(f"Qdrant index: {info.points_count} chunks | Local state: {local_count} files")
                 if local_count > 0 and info.points_count == 0:
                     lines.append("WARNING: Index Integrity Mismatch! Local state has files but Qdrant is empty.")
-                    lines.append("SUGGESTION: Run 'start_indexing' with reset=True")
+                    lines.append("SUGGESTION: Visit http://localhost:5001 to rebuild index")
             except Exception:
                 lines.append(f"Qdrant index: Collection not found | Local state: {local_count} files")
                 lines.append("WARNING: Collection missing!")

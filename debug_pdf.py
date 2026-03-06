@@ -1,7 +1,7 @@
 from docling.document_converter import DocumentConverter
 from pathlib import Path
 
-FILE_PATH = Path("/mnt/c/Users/wtrem/Downloads/2022-Return.pdf")
+FILE_PATH = Path("/mnt/c/Users/wtrem/Projects/do-rag/test_docs/test_sample.pdf")
 
 def main():
     print(f"Testing extraction for: {FILE_PATH}")
