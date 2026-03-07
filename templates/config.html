@@ -2,7 +2,15 @@
 
 {% block content %}
 <div class="card">
-    <h2>Configuration</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>Configuration</h2>
+        <div style="display: flex; gap: 0.5rem;">
+            <a href="/logs" style="text-decoration: none;">
+                <button type="button" style="background: #444;">View Logs</button>
+            </a>
+            <button type="button" id="btn-restart" onclick="restartApplication()" style="background: var(--accent);">Restart Application</button>
+        </div>
+    </div>
     <form id="config-form">
         <h3>Model Selection</h3>
         <div style="flex: 1;">
@@ -147,6 +155,29 @@
         inputs.forEach(input => {
             if (input.value === value) input.checked = true;
         });
+    }
+
+    async function restartApplication() {
+        if (!confirm('Restart the application? This will restart Ollama, Qdrant, MCP Server, Admin Portal, and WebUI. The page will need to be refreshed in 30–60 seconds.')) return;
+
+        const btn = document.getElementById('btn-restart');
+        const origText = btn.innerText;
+        btn.innerText = 'Restarting...';
+        btn.disabled = true;
+
+        try {
+            const res = await api('/api/restart', 'POST');
+            if (res.status === 'restart_initiated') {
+                alert(res.message || 'Restart started. Please refresh the page in 30–60 seconds.');
+            } else {
+                alert('Error: ' + (res.error || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('Request failed: ' + e);
+        } finally {
+            btn.innerText = origText;
+            btn.disabled = false;
+        }
     }
 
     async function pullModel() {

@@ -1,7 +1,8 @@
-# Configure logging to stderr so it doesn't break MCP stdout transport
+# Configure logging before any other imports
 import logging
 import sys
-logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+import logging_config
+logging_config.setup_logging(also_stderr=False)  # Avoid breaking MCP stdout
 logging.info("Starting server.py...")
 
 try:
@@ -27,9 +28,6 @@ try:
 except Exception as e:
     logging.error(f"Import failed: {e}")
     sys.exit(1)
-
-# Configure logging to stderr so it doesn't break MCP stdout transport
-logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
 try:
     mcp = FastMCP("Local RAG Search")

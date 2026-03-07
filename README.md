@@ -61,11 +61,13 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
 
 ## Quick Start
 
-Start all services (Ollama, MCP Server, Open WebUI) with one command:
+Start all services with one command:
 
 ```bash
 ./run.sh
 ```
+
+On first run, you'll be prompted for an Open WebUI admin password (saved to `.env`). This creates the chat admin account and imports the Local File Expert model. Subsequent runs use the saved credentials.
 
 Then open **http://localhost:3000** in your browser.
 
@@ -123,42 +125,26 @@ The server starts with dual transport on port **8000**:
 ./run_webui.sh
 ```
 
-This runs Open WebUI as a Docker container at **http://localhost:3000**.
+This runs Open WebUI as a Docker container at **http://localhost:3000**. Text-to-Speech (TTS) using Piper voices (openedai-speech, CPU-only) is pre-configured when `run_tts.sh` is started (included in `./run.sh`).
 
 #### Connecting MCP Tools
 
-**Quick Setup**: Import the pre-configured tool server from [`open_webui/tool-server-do-rag.json`](open_webui/tool-server-do-rag.json):
+**Pre-configured**: When you start Open WebUI via `./run_webui.sh`, the Local RAG Search MCP tool server is automatically configured. No manual import is needed for fresh installs.
 
-1. Go to **Admin Panel → Settings → Tools**.
-2. Click the **Import** button and select the JSON file.
-3. Click **Verify Connection** — it should show a green checkmark.
-4. Click **Save**.
-
-<details>
-<summary><strong>Manual Setup</strong> (if not importing)</summary>
-
-1. Go to **Admin Panel → Settings → Tools**.
-2. Add a new tool server with these settings:
-
-   | Setting | Value |
-   |---------|-------|
-   | **Type** | MCP (Streamable HTTP) |
-   | **URL** | `http://host.containers.internal:8000/mcp` (Podman) or `http://host.docker.internal:8000/mcp` (Docker) |
-   | **Auth Type** | None |
-   | **ID** | `do-rag` |
-   | **Name** | `Local RAG Search` |
-
-3. Click **Verify Connection** — it should show a green checkmark.
-4. Click **Save**.
-
-</details>
+If you have an existing Open WebUI volume from before this change, either:
+- Remove the volume and restart for a clean install: `podman volume rm open-webui` (or `docker volume rm open-webui`), then `./run_webui.sh`
+- Or manually import from [`open_webui/tool-server-do-rag.json`](open_webui/tool-server-do-rag.json): **Admin Panel → Settings → Tools → Import**
 
 #### Using the Tools in Chat
 
 1. Start a **New Chat**.
-2. Click the **Integrations icon** (plug icon) near the message input.
-3. Enable the MCP tools (`do-rag`).
+2. Click the **Integrations icon** (➕) near the message input.
+3. Enable **Local RAG Search** (`do-rag`).
 4. Ask a question about your documents, e.g.: *"Show me local files discussing motors."*
+
+**Pre-load the Local File Expert model:** The model preset is imported automatically when you run `./run.sh` and provide the admin password during first-run setup. Credentials are stored in `.env`. To change them, edit `.env` or delete it and run `./run.sh` again to be re-prompted. Or import manually: **Workspace → Models → Import** and select `open_webui/local-file-expert.json`. Edit `base_model_id` in the JSON if your LLM differs (e.g. `qwen2.5-coder:7b`).
+
+*Note: Some smaller models (e.g. Qwen Coder 7B) may not reliably invoke tools. Larger models (14B+) generally work better with MCP tools.*
 
 ### 5. IDE Integration (SSE)
 
@@ -201,15 +187,16 @@ For `stdio` mode (direct process spawning), use:
 | `run_ollama.sh` | Manage Ollama (`start`/`stop`/`status`/`restart`) |
 | `run_qdrant.sh` | Manage Qdrant (`start`/`stop`/`status`) |
 | `run_mcp_server.sh` | Manage MCP server (`start`/`stop`/`status`/`logs`) |
+| `run_tts.sh` | Manage TTS container (`start`/`stop`/`status`) — Piper voices (openedai-speech, CPU-only) for Open WebUI |
 | `run_webui.sh` | Start/restart Open WebUI container (Podman/Docker) |
 
-Logs are saved to `*.log` files in the project root:
-- `ollama_server.log` — Ollama output
-- `mcp_server.log` — MCP server output
+Logs are consolidated in `logs/do-rag.log` (Admin Portal, MCP server, indexer). View from the Admin UI when indexing reports errors, or run `tail -f logs/do-rag.log`. Ollama uses `ollama_server.log` in the project root.
 
 ## Configuration
 
-Configuration is loaded from `settings.json` (or Admin UI at http://localhost:5001/config). Key settings:
+**Credentials** are stored in `.env` (gitignored). See `.env.example` for the format. Run `./run.sh` to be prompted for missing values.
+
+**Document paths and models** are in `settings.json` (or Admin UI at http://localhost:5001/config). Key settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|

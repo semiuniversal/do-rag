@@ -4,8 +4,11 @@ __pycache__/
 .env
 indexing_state.json
 settings.json
-indexing.log
 config.py
+
+# Logs: consolidated in logs/do-rag.log; ollama uses ollama_server.log at root
+logs/
+*.log
 test_docs/
 test_docs_incremental/
 .idea/
@@ -13,5 +16,4 @@ test_docs_incremental/
 *.egg-info/
 dist/
 build/
-*.log
 *.pid

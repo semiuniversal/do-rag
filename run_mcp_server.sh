@@ -5,7 +5,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export RICH_CONSOLE_FORCE_TERMINAL=0
 SERVER_CMD="uv run server.py --transport sse --host 0.0.0.0"
 PID_FILE="${SCRIPT_DIR}/mcp_server.pid"
-LOG_FILE="${SCRIPT_DIR}/mcp_server.log"
+LOG_FILE="${SCRIPT_DIR}/logs/do-rag.log"
 
 case "$1" in
     start)
@@ -21,10 +21,8 @@ case "$1" in
         fi
 
         echo "Starting MCP Server (Dual Transport)..."
-        # Truncate log file on new start for cleanliness
-        echo "--- Session Start: $(date) ---" > "$LOG_FILE"
-        
-        # Run in background
+        mkdir -p "${SCRIPT_DIR}/logs"
+        # Append to unified log
         nohup $SERVER_CMD >> "$LOG_FILE" 2>&1 &
         
         # Save PID

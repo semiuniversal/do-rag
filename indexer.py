@@ -57,7 +57,7 @@ def _read_file_content(file_path: Path) -> str:
     if file_path.suffix.lower() == ".pdf":
         try:
             from pypdf import PdfReader
-            logging.info(f"Using pypdf for {file_path}")
+            logging.debug(f"Using pypdf for {file_path}")
             reader = PdfReader(file_path)
             content = ""
             for page in reader.pages:
@@ -68,7 +68,7 @@ def _read_file_content(file_path: Path) -> str:
         except ImportError:
             logging.warning("pypdf not installed. Falling back to docling.")
         except Exception as e:
-            logging.warning(f"pypdf failed for {file_path}: {e}")
+            logging.warning(f"pypdf failed for {file_path}: {type(e).__name__}: {e}")
 
     # Docling path for DOCX, PPTX, XLSX, HTML (and PDF fallback if pypdf failed)
     try:
@@ -97,7 +97,7 @@ def _read_file_content(file_path: Path) -> str:
     except ImportError:
         logging.warning("Docling not installed.")
     except Exception as e:
-        logging.warning(f"Docling failed for {file_path}: {e}")
+        logging.warning(f"Docling failed for {file_path}: {type(e).__name__}: {e}")
 
     return content
 
@@ -266,6 +266,7 @@ class IndexingJob:
             "processed_files": self.processed_files,
             "current_file": self.current_file,
             "errors": len(self.errors),
+            "error_details": self.errors[-20:],  # Last 20 errors for UI
             "files_deleted": self.files_deleted,
             "detail_status": self.detail_status,
         }
@@ -510,6 +511,9 @@ class IndexingJob:
                             await loop.run_in_executor(None, vectorstore.delete, old_ids)
 
                     if not content or len(content.strip()) == 0:
+                        err_msg = f"Empty/unparseable: {file_path.name} (ext={file_path.suffix})"
+                        logging.warning(err_msg)
+                        self.errors.append(err_msg)
                         state[str_path] = {"mtime": os.path.getmtime(file_path), "chunk_ids": []}
                         self.processed_files += 1
                         continue

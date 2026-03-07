@@ -9,14 +9,8 @@ import sys
 import time
 import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("indexing.log", mode="w"),
-        logging.StreamHandler(),
-    ],
-)
+import logging_config
+logging_config.setup_logging()
 
 from indexer import IndexingJob
 

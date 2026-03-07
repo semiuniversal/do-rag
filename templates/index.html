@@ -23,11 +23,16 @@
 
 <!-- Index Control Panel -->
 <div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
         <h2>Index Control</h2>
-        <div id="dirty-flag"
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <a href="/logs" style="text-decoration: none;">
+                <button type="button" style="background: #444;">View Logs</button>
+            </a>
+            <div id="dirty-flag"
             style="display: none; background: #ff4444; color: white; padding: 0.5rem 1rem; border-radius: 4px; font-weight: bold; font-size: 0.9rem; box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);">
             ⚠️ Configuration Changed - Re-index Recommended
+            </div>
         </div>
     </div>
 
@@ -64,6 +69,10 @@
                 style="font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">-</span>
             <strong>ETA:</strong> <span id="stats-eta">-</span>
             <strong>Last Error:</strong> <span id="stats-error" style="color: var(--danger);">-</span>
+        </div>
+        <div id="error-details" style="display: none; margin-top: 0.5rem; padding: 0.5rem; background: #222; border-radius: 4px; font-size: 0.8rem; font-family: monospace; max-height: 120px; overflow-y: auto;">
+            <strong>Recent errors:</strong>
+            <ul id="error-list" style="margin: 0.25rem 0 0 1rem; padding: 0;"></ul>
         </div>
     </div>
 </div>
@@ -110,6 +119,12 @@
         } catch (e) {
             console.error("Status Poll Failed", e);
         }
+    }
+
+    function escapeHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
     }
 
     function updateControlPanel(data) {
@@ -176,10 +191,22 @@
         document.getElementById('stats-eta').innerText = eta;
 
         // Errors
+        const errorEl = document.getElementById('stats-error');
+        const detailsEl = document.getElementById('error-details');
+        const listEl = document.getElementById('error-list');
         if (data.errors > 0) {
-            document.getElementById('stats-error').innerText = `${data.errors} errors (Check logs)`;
+            const logPath = data.log_path || 'logs/do-rag.log';
+            errorEl.innerHTML = `${data.errors} errors — <a href="/logs" style="color: var(--accent);">View logs</a>`;
+            const details = data.error_details || [];
+            if (details.length > 0) {
+                detailsEl.style.display = 'block';
+                listEl.innerHTML = details.slice(-5).map(e => `<li>${escapeHtml(e)}</li>`).join('');
+            } else {
+                detailsEl.style.display = 'none';
+            }
         } else {
-            document.getElementById('stats-error').innerText = "None";
+            errorEl.innerText = "None";
+            detailsEl.style.display = 'none';
         }
 
         // Dirty Flag

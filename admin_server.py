@@ -7,10 +7,13 @@ import subprocess
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_from_directory
 import config
+import logging_config
+
+logging_config.setup_logging()
+
 import indexer
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Indexer Integration ---
 indexer_thread = None
@@ -48,11 +51,16 @@ def get_dirty_status():
 
 @app.route("/")
 def index():
-    return render_template("index.html", webui_url=config.WEBUI_URL)
+    return render_template("index.html", webui_url=config.WEBUI_URL, current_page="dashboard")
 
 @app.route("/config")
 def config_page():
-    return render_template("config.html")
+    return render_template("config.html", current_page="config")
+
+
+@app.route("/logs")
+def logs_page():
+    return render_template("logs.html", current_page="logs")
 
 # --- API ---
 
@@ -178,6 +186,27 @@ def api_models():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/restart", methods=["POST"])
+def api_restart():
+    """Run run.sh to restart all services (Ollama, Qdrant, MCP, Admin Portal, WebUI)."""
+    project_root = Path(__file__).parent.resolve()
+    run_script = project_root / "run.sh"
+    if not run_script.exists():
+        return jsonify({"error": "run.sh not found"}), 404
+    try:
+        subprocess.Popen(
+            ["/bin/bash", str(run_script)],
+            cwd=str(project_root),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return jsonify({"status": "restart_initiated", "message": "Restart started. The application will restart shortly. Please refresh the page in 30–60 seconds."})
+    except Exception as e:
+        logging.error(f"Failed to start restart: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/models/pull", methods=["POST"])
 def api_pull_model():
     model_name = request.json.get("model")
@@ -196,12 +225,106 @@ def api_pull_model():
 
 # --- Indexer APIs ---
 
+def _subsystem_from_line(line: str) -> str:
+    """Extract or infer subsystem from a log line. Supports old (4-field) and new (5-field) format."""
+    parts = line.split(" | ", 4)  # max 5 parts: ts, level, [subsystem], name, message
+    if len(parts) >= 5:
+        return parts[2].strip()
+    if len(parts) >= 4:
+        name = parts[2].strip()
+        if "werkzeug" in name:
+            return "admin-ui"
+        if "indexer" in name or "index_docs" in name or "windows" in name:
+            return "indexer"
+        if "server" in name:
+            return "mcp-server"
+        if "config" in name or "settings" in name:
+            return "config"
+    return "system"
+
+
+def _read_log_lines(log_path: Path, tail: int = None, offset: int = 0, limit: int = 500,
+                    level_filter: str = None, search: str = None,
+                    subsystem_filter: str = None) -> tuple:
+    """Read log lines with optional filters. Returns (lines, next_offset, has_more, total).
+    offset: number of lines already loaded from the end (for 'load older').
+    """
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        all_lines = f.readlines()
+
+    if level_filter:
+        all_lines = [l for l in all_lines if f"| {level_filter}" in l or f"| {level_filter} " in l]
+    if subsystem_filter:
+        all_lines = [l for l in all_lines if _subsystem_from_line(l) == subsystem_filter]
+    if search:
+        search_lower = search.lower()
+        all_lines = [l for l in all_lines if search_lower in l.lower()]
+
+    total = len(all_lines)
+    if tail:
+        lines = all_lines[-min(tail, len(all_lines)):]
+        next_offset = 0
+        has_more = False
+    else:
+        # offset=0: last 500. offset=500: next 500 older.
+        n = len(all_lines)
+        start = max(0, n - offset - limit)
+        end = n - offset
+        lines = all_lines[start:end]
+        next_offset = offset + len(lines)
+        has_more = start > 0
+
+    return lines, next_offset, has_more, total
+
+
+@app.route("/api/logs")
+def api_logs():
+    """Return log lines as JSON with pagination, level filter, and search."""
+    log_path = logging_config.get_log_path()
+    if not log_path.exists():
+        return jsonify({"error": "Log file not yet created", "lines": []}), 404
+
+    try:
+        limit = min(int(request.args.get("limit", 500)), 2000)
+    except ValueError:
+        limit = 500
+    tail = request.args.get("tail")
+    tail = int(tail) if tail else None
+    offset = int(request.args.get("offset", 0))
+    level_filter = request.args.get("level") or None
+    search = request.args.get("search") or None
+    subsystem_filter = request.args.get("subsystem") or None
+
+    lines, next_offset, has_more, total = _read_log_lines(
+        log_path, tail=tail, offset=offset, limit=limit,
+        level_filter=level_filter, search=search,
+        subsystem_filter=subsystem_filter
+    )
+    lines = [l.rstrip("\n") for l in lines]
+
+    return jsonify({
+        "lines": lines,
+        "next_offset": next_offset,
+        "has_more": has_more,
+        "total_lines": total,
+        "subsystems": logging_config.get_subsystems(),
+    })
+
+
+@app.route("/api/logs/clear", methods=["POST"])
+def api_logs_clear():
+    """Clear the log file. Requires confirmation from the client."""
+    if logging_config.clear_log_file():
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "Failed to clear logs"}), 500
+
+
 @app.route("/api/indexer/status")
 def api_indexer_status():
     job = indexer.get_current_job()
     status = job.get_status()
-    # Enhance with dirty flag if needed
     status["dirty"] = get_dirty_status()
+    status["log_path"] = str(logging_config.get_log_path())
     return jsonify(status)
 
 @app.route("/api/indexer/start", methods=["POST"])

@@ -129,9 +129,10 @@
 <body>
     <nav>
         <h1>Do-RAG Admin</h1>
-        <div>
-            <a href="/">Dashboard</a>
-            <a href="/config">Configuration</a>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <a href="/" {% if current_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+            <a href="/config" {% if current_page == 'config' %}class="active"{% endif %}>Configuration</a>
+            <a href="/logs" {% if current_page == 'logs' %}class="active"{% endif %} style="background: var(--accent); color: white; padding: 0.35rem 0.75rem; border-radius: 4px; text-decoration: none; font-weight: 500;">Logs</a>
         </div>
     </nav>
     <main>

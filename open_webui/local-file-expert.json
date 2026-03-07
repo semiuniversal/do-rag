@@ -1,0 +1,46 @@
+[
+  {
+    "id": "local-file-expert",
+    "base_model_id": "qwen2.5:14b",
+    "name": "Local File Expert",
+    "meta": {
+      "profile_image_url": "/static/favicon.png",
+      "description": "Interfaces with local file system and answers questions",
+      "capabilities": {
+        "file_context": true,
+        "vision": false,
+        "file_upload": true,
+        "web_search": true,
+        "image_generation": false,
+        "code_interpreter": false,
+        "citations": true,
+        "status_updates": true,
+        "builtin_tools": true
+      },
+      "suggestion_prompts": null,
+      "tags": [],
+      "toolIds": ["server:mcp:do-rag"],
+      "defaultFeatureIds": ["web_search"],
+      "builtinTools": {
+        "time": true,
+        "memory": true,
+        "chats": true,
+        "notes": false,
+        "knowledge": false,
+        "channels": true,
+        "web_search": true,
+        "image_generation": true,
+        "code_interpreter": false
+      },
+      "tts": {
+        "voice": "alloy"
+      }
+    },
+    "params": {
+      "system": "You are a helpful assistant with access to document search. Use the available tools when the user asks about documents or files."
+    },
+    "access_grants": [],
+    "is_active": true,
+    "write_access": true
+  }
+]
