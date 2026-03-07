@@ -6828,3 +6828,133 @@ All application logging goes through `logging_config.py` to `logs/do-rag.log`. `
 
 ---
 
+_**User**_
+
+You don't mention a lot of these files, such as @debug_unbuffered.log Is this stuff really required? 
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Organizing debug scripts**
+
+I'm identifying and categorizing the debug scripts and log files to understand the current debugging setup. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+Here’s what’s actually used and what isn’t.
+
+## Logs that are used
+
+- **`logs/do-rag.log`** – main app log (admin server, MCP server, indexer)
+- **`ollama_server.log`** – used by `run_ollama.sh` for Ollama output
+
+## Logs that are not used
+
+These are leftovers from older setups or manual runs:
+
+- `admin.log`, `mcp_server.log`, `indexer_final.log`, `indexer_standalone.log`, `indexer_restore.log`, `indexing_restore.log`, `debug.log`, `install.log`
+- **`debug_unbuffered.log`** – not referenced anywhere in the repo; likely from a manual run or IDE config
+
+`.gitignore` already has `logs/` and `*.log`, so these files are ignored by git.
+
+## Debug/verify scripts
+
+These are one-off dev tools, not part of the main app:
+
+- `debug_dirty.py`, `debug_optimization.py`, `debug_pdf.py`, `debug_specific_pdf.py`, `debug_large_file.py`
+- `reproduce_issue.py`, `verify_*.py`
+
+They’re not required for normal operation.
+
+---
+
+**Summary:** Only `logs/do-rag.log` and `ollama_server.log` are used. You can safely delete the other log files and the debug/verify scripts if you don’t need them for debugging. If you want, I can suggest concrete cleanup steps (e.g. a small script or commands to remove them).
+
+---
+
