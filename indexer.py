@@ -7,11 +7,26 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
+
+# Control chars (except \t \n \r) can crash Ollama's embedding runner
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _prepare_chunk_for_embedding(doc: Document, max_chars: int) -> Document:
+    """Truncate and sanitize chunk to avoid Ollama 500/EOF (context limit, bad chars)."""
+    text = doc.page_content
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    text = _CONTROL_CHAR_RE.sub(" ", text)
+    if text != doc.page_content:
+        return Document(page_content=text, metadata=dict(doc.metadata))
+    return doc
 
 import config
 import logging_config
@@ -179,33 +194,20 @@ def _read_file_content(file_path: Path) -> str:
             logging.warning(f"python-pptx failed for {file_path}: {type(e).__name__}: {e}")
             return ""
 
-    # XLSX: openpyxl — sheet text (data_only=False avoids slow formula evaluation)
+    # XLSX: openpyxl — summary only (sheet names + headers). Never iterate all rows (too slow).
     if suffix == ".xlsx":
         try:
-            file_size = file_path.stat().st_size
-            max_full_bytes = getattr(config, "INDEXING_MAX_XLSX_FULL_BYTES", 150000)  # ~150KB
-            use_summary = file_size > max_full_bytes
-
             from openpyxl import load_workbook
-            wb = load_workbook(file_path, read_only=True, data_only=False, keep_vba=False)
+            wb = load_workbook(file_path, read_only=True, data_only=True, keep_vba=False)
             parts = []
-            if use_summary:
-                # Large file: only sheet names + column headers (first row per sheet)
-                for sheet in wb.worksheets:
-                    try:
-                        first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
-                        header_parts = [str(c).strip() for c in (first_row or ()) if c is not None and str(c).strip()]
-                        headers = " | ".join(header_parts) if header_parts else "(no headers)"
-                        parts.append(f"Sheet: {sheet.title} | Columns: {headers}")
-                    except (StopIteration, Exception):
-                        parts.append(f"Sheet: {sheet.title} | (could not read headers)")
-                logging.info(f"Excel {file_path.name} ({file_size//1024}KB): using summary mode (sheet names + headers only)")
-            else:
-                for sheet in wb.worksheets:
-                    for row in sheet.iter_rows(values_only=True):
-                        row_text = " | ".join(str(c) for c in row if c is not None and str(c).strip())
-                        if row_text.strip():
-                            parts.append(row_text)
+            for sheet in wb.worksheets:
+                try:
+                    first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+                    header_parts = [str(c).strip() for c in (first_row or ()) if c is not None and str(c).strip()]
+                    headers = " | ".join(header_parts) if header_parts else "(no headers)"
+                    parts.append(f"Sheet: {sheet.title} | Columns: {headers}")
+                except (StopIteration, Exception):
+                    parts.append(f"Sheet: {sheet.title} | (could not read headers)")
             wb.close()
             return "\n\n".join(parts) if parts else ""
         except Exception as e:
@@ -742,6 +744,15 @@ class IndexingJob:
             if self._cancelled:
                 return self.get_status_text()
 
+            # Sort by file size: small files first (fast progress, defer large/problem-prone files)
+            def _file_size(p: Path) -> int:
+                try:
+                    return p.stat().st_size
+                except OSError:
+                    return 0
+            files_to_process.sort(key=_file_size)
+            logging.info(f"Processing order: smallest first ({len(files_to_process)} files).")
+
             # Process new/modified files
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=config.CHUNK_SIZE,
@@ -753,12 +764,15 @@ class IndexingJob:
             files_since_save = 0
             # Adaptive backoff: increase delay, decrease batch size on 500/EOF
             # Errors-only: start conservative (these files failed before)
-            base_delay = getattr(config, "INDEXING_DELAY", 0.3)
-            base_batch = getattr(config, "INDEXING_BATCH_SIZE", 5)
+            base_delay = getattr(config, "INDEXING_DELAY", 0.05)
+            base_batch = getattr(config, "INDEXING_BATCH_SIZE", 20)
             if errors_only:
                 effective_delay = [max(base_delay * 2, 1.0)]  # At least 1s between batches
-                effective_batch_size = [min(base_batch, 2)]    # Max 2 chunks at a time
-                logging.info(f"Re-indexing errors with conservative settings: delay={effective_delay[0]:.1f}s, batch_size={int(effective_batch_size[0])}")
+                effective_batch_size = [min(base_batch, 2)]   # Max 2 chunks at a time
+                logging.info(
+                    f"Re-indexing errors: lenient mode (no fail-fast), "
+                    f"delay={effective_delay[0]:.1f}s, batch_size={int(effective_batch_size[0])}"
+                )
             else:
                 effective_delay = [base_delay]
                 effective_batch_size = [base_batch]
@@ -803,6 +817,11 @@ class IndexingJob:
                         }],
                     )
 
+                    # Truncate and sanitize each chunk before embedding (avoids Ollama 500/EOF)
+                    max_chunk_chars = getattr(config, "INDEXING_MAX_CHUNK_CHARS", 6144)
+                    chunks = [_prepare_chunk_for_embedding(c, max_chunk_chars) for c in chunks]
+                    chunks = [c for c in chunks if c.page_content.strip()]
+
                     self.parse_time_seconds += time.time() - t_parse_start
 
                     # Generate IDs for all chunks in this file
@@ -814,27 +833,51 @@ class IndexingJob:
                         file_new_ids.append(chunk_id)
 
                     # Batch-add chunks to Qdrant
+                    # Reset backoff at start of each file (don't let one bad file poison the rest)
+                    effective_delay[0] = base_delay
+                    effective_batch_size[0] = base_batch
                     # Adaptive Batching: Try desired batch size, split on failure
                     target_batch_size = max(1, int(effective_batch_size[0]))
-                    chunk_limit = getattr(config, "INDEXING_MAX_BATCH_TOKENS", 8000)
+                    # Batch char limit: ~4 chars/token, cap total to avoid Ollama overload
+                    batch_char_limit = getattr(config, "INDEXING_MAX_BATCH_TOKENS", 8000) * 4
                     consecutive_embed_failures = [0]  # Circuit breaker: skip file after N failures
+                    batches_since_failure = [0]  # Recovery: nudge back toward base after N successes
+                    # Manual re-index of failed files: be lenient (retries, no fail-fast)
+                    fail_fast = False if errors_only else getattr(config, "INDEXING_FAIL_FAST", True)
+                    circuit_threshold = 1 if fail_fast else 3
+                    embed_timeout = getattr(config, "INDEXING_EMBED_TIMEOUT_SECONDS", 30)
+
+                    def _run_embed(docs, ids):
+                        return vectorstore.add_documents(documents=docs, ids=ids)
+
+                    async def _embed_batch(docs, ids):
+                        fut = loop.run_in_executor(None, _run_embed, docs, ids)
+                        if embed_timeout > 0:
+                            await asyncio.wait_for(fut, timeout=embed_timeout)
+                        else:
+                            await fut
 
                     def _backoff_on_failure():
                         """Increase delay and decrease batch size on 500/EOF."""
+                        batches_since_failure[0] = 0
                         effective_delay[0] = min(effective_delay[0] * 1.5, 5.0)
                         effective_batch_size[0] = max(1, effective_batch_size[0] / 2)
                         logging.error(f"Embedding 500/EOF backoff: delay={effective_delay[0]:.2f}s, batch_size={int(effective_batch_size[0])}")
 
                     def _maybe_circuit_break(orig_exc: Exception) -> None:
-                        """After 3 consecutive EOF/500 failures, abort file to avoid grinding."""
+                        """After N consecutive EOF/500/timeout failures, abort file (fail-fast skips on 1st)."""
                         err = str(orig_exc)
-                        if "EOF" not in err and "500" not in err and "Connection refused" not in err:
+                        is_bad = (
+                            "EOF" in err or "500" in err or "Connection refused" in err
+                            or "timeout" in err.lower() or isinstance(orig_exc, asyncio.TimeoutError)
+                        )
+                        if not is_bad:
                             return
                         consecutive_embed_failures[0] += 1
-                        if consecutive_embed_failures[0] >= 3:
+                        if consecutive_embed_failures[0] >= circuit_threshold:
                             raise EmbeddingCircuitBreaker(
-                                f"Aborting file after {consecutive_embed_failures[0]} consecutive embedding failures (EOF/500). "
-                                "Skipping remaining chunks. Check Ollama and OLLAMA_BASE_URL."
+                                f"Aborting file after {consecutive_embed_failures[0]} embedding failure(s) (EOF/500). "
+                                "Skipping file. See Ollama issue #6094."
                             ) from orig_exc
 
                     # Helper function for recursive adaptive batching
@@ -845,7 +888,7 @@ class IndexingJob:
                         # 1. Check character limit first (simple heuristic for tokens)
                         total_chars = sum(len(d.page_content) for d in docs_subset)
                         # If over limit and we have more than 1 item, split immediately
-                        if total_chars > chunk_limit and len(docs_subset) > 1:
+                        if total_chars > batch_char_limit and len(docs_subset) > 1:
                             mid = len(docs_subset) // 2
                             await _adaptive_embed(docs_subset[:mid], ids_subset[:mid], depth+1)
                             await _adaptive_embed(docs_subset[mid:], ids_subset[mid:], depth+1)
@@ -858,20 +901,28 @@ class IndexingJob:
                                 await asyncio.sleep(batch_delay)
 
                             t_embed_start = time.time()
-                            await loop.run_in_executor(
-                                None,
-                                lambda d=docs_subset, ids=ids_subset: vectorstore.add_documents(
-                                    documents=d, ids=ids
-                                ),
-                            )
+                            await _embed_batch(docs_subset, ids_subset)
                             self.embed_time_seconds += time.time() - t_embed_start
                             consecutive_embed_failures[0] = 0
+                            batches_since_failure[0] += 1
+                            # Recovery: after 15 successful batches, nudge back toward base
+                            if batches_since_failure[0] >= 15:
+                                batches_since_failure[0] = 0
+                                if effective_delay[0] > base_delay:
+                                    effective_delay[0] = max(base_delay, effective_delay[0] * 0.8)
+                                if effective_batch_size[0] < base_batch:
+                                    effective_batch_size[0] = min(base_batch, effective_batch_size[0] * 1.5)
                             return
 
+                        except asyncio.TimeoutError as e:
+                            _backoff_on_failure()
+                            _maybe_circuit_break(e)
+                            raise
                         except Exception as e:
                             err_msg = str(e)
                             if "EOF" in err_msg or "500" in err_msg or "Connection refused" in err_msg:
                                 _backoff_on_failure()
+                                _maybe_circuit_break(e)  # Fail-fast: skip file on 1st failure
                             # If batch size is 1, we can't split further. Retrying with backoff is the only option.
                             if len(docs_subset) == 1:
                                 if "EOF" in err_msg or "500" in err_msg or "Connection refused" in err_msg:
@@ -883,14 +934,10 @@ class IndexingJob:
                                         await asyncio.sleep(wait_time)
                                         try:
                                             t_embed_start = time.time()
-                                            await loop.run_in_executor(
-                                                None,
-                                                lambda d=docs_subset, ids=ids_subset: vectorstore.add_documents(
-                                                    documents=d, ids=ids
-                                                ),
-                                            )
+                                            await _embed_batch(docs_subset, ids_subset)
                                             self.embed_time_seconds += time.time() - t_embed_start
                                             consecutive_embed_failures[0] = 0
+                                            batches_since_failure[0] += 1
                                             return  # Success on retry
                                         except Exception as final_e:
                                             if attempt == max_retries - 1:
@@ -903,14 +950,10 @@ class IndexingJob:
                                                         try:
                                                             await asyncio.sleep(1)  # Brief pause before truncation fallback
                                                             t_embed_start = time.time()
-                                                            await loop.run_in_executor(
-                                                                None,
-                                                                lambda: vectorstore.add_documents(
-                                                                    documents=[trunc_doc], ids=ids_subset
-                                                                ),
-                                                            )
+                                                            await _embed_batch([trunc_doc], ids_subset)
                                                             self.embed_time_seconds += time.time() - t_embed_start
                                                             consecutive_embed_failures[0] = 0
+                                                            batches_since_failure[0] += 1
                                                             logging.info(f"Embedded truncated chunk ({len(trunc_content)} chars) for {doc.metadata.get('filename', '?')}")
                                                             return
                                                         except Exception:
@@ -922,7 +965,7 @@ class IndexingJob:
                                     raise e
                             else:
                                 # Batch > 1 failed -> Split and recurse (Divide and Conquer)
-                                logging.error(f"Embedding 500/EOF: batch of {len(docs_subset)} items failed (chars={total_chars}). Splitting and retrying...")
+                                logging.error(f"Embedding 500/EOF: batch of {len(docs_subset)} items failed (chars={total_chars}). Splitting...")
                                 mid = len(docs_subset) // 2
                                 await _adaptive_embed(docs_subset[:mid], ids_subset[:mid], depth+1)
                                 await _adaptive_embed(docs_subset[mid:], ids_subset[mid:], depth+1)
@@ -1043,14 +1086,20 @@ async def _index_single_file_async(file_path: Path) -> Tuple[bool, str]:
     content = await loop.run_in_executor(None, _read_file_content, file_path)
     state = _load_state()
 
-    # Delete old chunks
-    if str_path in state:
-        old_ids = state[str_path].get("chunk_ids", [])
-        if old_ids:
-            try:
-                await loop.run_in_executor(None, vectorstore.delete, old_ids)
-            except Exception as e:
-                logging.warning(f"Could not delete old chunks for {str_path}: {e}")
+    # Clear all chunks for this file (no duplicate embeddings)
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
+    try:
+        client.delete(
+            collection_name=config.COLLECTION_NAME,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="metadata.source", match=MatchValue(value=str_path))]
+                )
+            ),
+            wait=True,
+        )
+    except Exception as e:
+        logging.warning(f"Could not delete existing chunks for {str_path}: {e}")
 
     if not content or len(content.strip()) == 0:
         current_mtime = os.path.getmtime(file_path)
@@ -1077,6 +1126,10 @@ async def _index_single_file_async(file_path: Path) -> Tuple[bool, str]:
         [content],
         metadatas=[{"source": str_path, "filename": file_path.name, "file_modified": time.ctime(current_mtime)}],
     )
+    max_chunk_chars = getattr(config, "INDEXING_MAX_CHUNK_CHARS", 6144)
+    chunks = [_prepare_chunk_for_embedding(c, max_chunk_chars) for c in chunks]
+    chunks = [c for c in chunks if c.page_content.strip()]
+
     file_new_ids = []
     for j, chunk in enumerate(chunks):
         chunk.metadata["chunk_index"] = j
@@ -1084,8 +1137,7 @@ async def _index_single_file_async(file_path: Path) -> Tuple[bool, str]:
         chunk_id = hashlib.sha256(id_str.encode()).hexdigest()[:32]
         file_new_ids.append(chunk_id)
 
-    # Add in batches of 5 to avoid overload
-    batch_size = 5
+    batch_size = getattr(config, "INDEXING_BATCH_SIZE", 20)
     for i in range(0, len(chunks), batch_size):
         batch_docs = chunks[i : i + batch_size]
         batch_ids = file_new_ids[i : i + batch_size]

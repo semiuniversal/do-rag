@@ -8,6 +8,7 @@ from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from llm_backend import get_embeddings
 import config
+from indexer import _prepare_chunk_for_embedding
 
 TARGET_FILE = Path("/mnt/c/Users/wtrem/Downloads/2022-Return.pdf")
 
@@ -39,7 +40,10 @@ async def main():
             "file_modified": time.ctime(current_mtime),
         }]
     )
-    print(f"✅ Created {len(chunks)} chunks.")
+    max_chunk_chars = getattr(config, "INDEXING_MAX_CHUNK_CHARS", 6144)
+    chunks = [_prepare_chunk_for_embedding(c, max_chunk_chars) for c in chunks]
+    chunks = [c for c in chunks if c.page_content.strip()]
+    print(f"✅ Created {len(chunks)} chunks (after truncation/sanitization).")
 
     # 3. Embed & Store
     print("Connecting to Qdrant...")
