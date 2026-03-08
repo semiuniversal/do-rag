@@ -5,8 +5,9 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
 ## Features
 
 - **Local & Private**: Runs entirely on your machine — no data leaves your system.
-- **Incremental Indexing**: Only processes new or modified files.
+- **Incremental Indexing**: Only processes new or modified files. Re-index errors only for fast retries.
 - **Robust Vector Search**: Uses Qdrant (Podman/Docker) for high-performance, crash-resilient vector storage.
+- **Admin Portal**: Dashboard for indexing control, error filtering, configuration, and logs.
 - **MCP Server**: Exposes search tools via the [Model Context Protocol](https://modelcontextprotocol.io/) with dual transport support:
   - **Streamable HTTP** at `/mcp` — for Open WebUI and other HTTP-based clients
   - **SSE** at `/sse-transport/sse` — for IDEs (LM Studio, Claude Desktop, etc.)
@@ -27,13 +28,15 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
 └──────────────┘                              └───────────┘
 ```
 
+The **Admin Portal** (:5001) provides indexing control, configuration, and logs.
+
 ## Prerequisites
 
 1. **Ollama**: Installed and available on `PATH`.
 2. **Models**: Pull the required models:
    ```bash
    ollama pull nomic-embed-text
-   ollama pull qwen2.5-coder:7b-instruct-q5_K_M   # or your preferred LLM
+   ollama pull qwen2.5:14b   # or your preferred LLM (14B+ recommended for reliable tool use)
    ```
 3. **Python & uv**: This project uses [`uv`](https://docs.astral.sh/uv/) for dependency management.
 4. **Podman or Docker**: Required for Qdrant and Open WebUI. Scripts prefer Podman when available; use `CONTAINER_CMD=docker ./run.sh` to force Docker.
@@ -53,7 +56,7 @@ A privacy-preserving, local document search system using RAG (Retrieval-Augmente
        "/home/yourname/Projects",
        "/home/yourname/Documents"
      ],
-     "SUPPORTED_EXTENSIONS": [".md", ".txt", ".docx"]
+     "SUPPORTED_EXTENSIONS": [".md", ".txt", ".docx", ".pdf", ".pptx", ".xlsx", ".html"]
    }
    ```
 
@@ -69,20 +72,22 @@ Start all services with one command:
 
 On first run, you'll be prompted for an Open WebUI admin password (saved to `.env`). This creates the chat admin account and imports the Local File Expert model. Subsequent runs use the saved credentials.
 
-Then open **http://localhost:3000** in your browser.
+- **Admin Portal**: http://localhost:5001 — indexing, config, logs
+- **Chat UI**: http://localhost:3000 — Open WebUI
 
 ## Usage
 
 ### 1. Indexing Documents
 
-Scan your configured directories and generate embeddings:
+Index documents via the **Admin UI** (http://localhost:5001) or CLI:
 
 ```bash
 uv run index_docs.py
 ```
 
-- **Incremental**: Subsequent runs only process changed files.
-- **Force Reset**: `uv run index_docs.py --reset` (clears index and re-indexes).
+- **Incremental**: Only new or modified files are processed.
+- **Re-index errors only**: `uv run index_docs.py --errors-only` — retries only files that failed (fast, no full scan).
+- **Force Reset**: `uv run index_docs.py --reset` (clears index and re-indexes from scratch).
 
 ### 2. Search (CLI)
 
@@ -142,9 +147,11 @@ If you have an existing Open WebUI volume from before this change, either:
 3. Enable **Local RAG Search** (`do-rag`).
 4. Ask a question about your documents, e.g.: *"Show me local files discussing motors."*
 
-**Pre-load the Local File Expert model:** The model preset is imported automatically when you run `./run.sh` and provide the admin password during first-run setup. Credentials are stored in `.env`. To change them, edit `.env` or delete it and run `./run.sh` again to be re-prompted. Or import manually: **Workspace → Models → Import** and select `open_webui/local-file-expert.json`. Edit `base_model_id` in the JSON if your LLM differs (e.g. `qwen2.5-coder:7b`).
+**Pre-load the Local File Expert model:** The model preset is imported automatically when you run `./run.sh` and provide the admin password during first-run setup. Credentials are stored in `.env`. To change them, edit `.env` or delete it and run `./run.sh` again to be re-prompted. Or import manually: **Workspace → Models → Import** and select `open_webui/local-file-expert.json`. Edit `base_model_id` in the JSON if your LLM differs.
 
-*Note: Some smaller models (e.g. Qwen Coder 7B) may not reliably invoke tools. Larger models (14B+) generally work better with MCP tools.*
+**LLM model recommendations:** Larger models (14B+) generally follow instructions and invoke MCP tools more reliably. **Qwen2.5:14b** works well. **phi4-reasoning** (14B, selective reasoning) is a strong alternative. *Phi-4-reasoning-vision-15B* (multimodal, vision + reasoning) may be a good candidate to try when it becomes available on Ollama.
+
+*Note: Some smaller models (e.g. 7B) may not reliably invoke tools.*
 
 ### 5. IDE Integration (SSE)
 
@@ -183,7 +190,8 @@ For `stdio` mode (direct process spawning), use:
 
 | Script | Purpose |
 |--------|---------|
-| `run.sh` | Start all services (Ollama + Qdrant + MCP + Open WebUI) |
+| `run.sh` | Start all services (Ollama + Qdrant + MCP + Admin Portal + Open WebUI). Runs `stop.sh` first for a clean slate. |
+| `stop.sh` | Halt all services and abort any running indexing (run before `run.sh` for clean restart) |
 | `run_ollama.sh` | Manage Ollama (`start`/`stop`/`status`/`restart`) |
 | `run_qdrant.sh` | Manage Qdrant (`start`/`stop`/`status`) |
 | `run_mcp_server.sh` | Manage MCP server (`start`/`stop`/`status`/`logs`) |
@@ -203,16 +211,25 @@ Logs are consolidated in `logs/do-rag.log` (Admin Portal, MCP server, indexer). 
 | `QDRANT_HOST` | `"localhost"` | Qdrant hostname |
 | `QDRANT_PORT` | `6333` | Qdrant API port |
 | `DOCUMENT_DIRECTORIES` | `[]` | Directories to index |
-| `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx` | File types to process |
+| `SUPPORTED_EXTENSIONS` | `.md`, `.txt`, `.docx`, `.pdf`, `.pptx`, `.xlsx`, `.html` | File types to process |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `EMBEDDING_MODEL` | `nomic-rag` | Model for document embeddings |
 | `LLM_MODEL` | `qwen2.5:14b` | Model for RAG answers |
 | `INDEXING_BATCH_SIZE` | `10` | Chunks per Qdrant write (higher = faster) |
 
+## Admin Portal
+
+The Admin UI at **http://localhost:5001** provides:
+
+- **Dashboard**: Index status, progress, and controls (Start, Re-index Errors Only, Reset and Re-index).
+- **Indexed Files**: Table with error filtering — use "Show errors only" to focus on problematic files.
+- **Configuration**: Directories, extensions, exclusions.
+- **Logs**: Consolidated logs with search and filters.
+
 ## Limitations
 
-- **Supported file types**: The indexer supports **Markdown** (`.md`), **plain text** (`.txt`), and **Word documents** (`.docx`). Other formats like `.pdf`, `.xlsx`, and `.pptx` are not yet supported.
-- **No real-time indexing**: Documents are indexed on-demand via `index_docs.py`. New or modified files won't be searchable until the indexer is re-run.
+- **Supported file types**: Markdown (`.md`), plain text (`.txt`), Word (`.docx`), PDF (`.pdf`), PowerPoint (`.pptx`), Excel (`.xlsx`), HTML (`.html`). Uses lightweight CPU-only extractors: PyMuPDF (PDF), python-docx (DOCX), python-pptx (PPTX), openpyxl (XLSX), html2text (HTML). Native-text documents only; scanned/image PDFs are not supported.
+- **No real-time indexing**: Documents are indexed on-demand. New or modified files won't be searchable until indexing is run (via Admin UI or `index_docs.py`).
 
 ## Troubleshooting
 
@@ -227,6 +244,23 @@ Check the logs: `./run_mcp_server.sh logs`
 ### Ollama connection errors
 - Ensure Ollama is running: `./run_ollama.sh status`
 - Verify the required models are pulled: `ollama list`
+
+### Scanned/image-only PDFs
+- The indexer extracts text from native-text PDFs only. Scanned PDFs (images of text) are not supported and will be marked empty/unparseable.
+
+### Embedding 500 / EOF errors during indexing
+- The indexer unloads other Ollama models before indexing and backs off automatically on 500/EOF (increases delay, reduces batch size)
+- If the pre-index test embedding fails, a warning is logged; indexing proceeds with adaptive backoff
+- In Admin Config → Indexing, or `settings.json`, you can set:
+  - `INDEXING_BATCH_SIZE`: 5 (default); lower = less load
+  - `INDEXING_DELAY`: 0.3 (default); higher = longer pause between batches
+- For large text files, the indexer retries failed chunks and falls back to truncated content if needed
+
+### Open WebUI shows error_empty_response
+- Open WebUI can take 1–2 minutes to start. Wait and refresh.
+- Check container logs: `podman logs open-webui` (or `docker logs open-webui`)
+- Restart just WebUI: `./run_webui.sh` (waits for health before returning)
+- If the container keeps crashing, try a clean start: `podman rm -f open-webui` then `./run_webui.sh`
 
 ### Migrated from Windows to WSL Linux
 If you moved the project from the Windows filesystem to the WSL Linux filesystem, update `settings.json` (or Admin UI config) to use Linux paths. Replace `/mnt/c/Users/...` with `/home/username/...` for documents now under the Linux filesystem. Prefer Linux paths for lower I/O latency.

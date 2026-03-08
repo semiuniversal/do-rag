@@ -68,13 +68,22 @@ def scan_windows(directories: List[str], extensions: List[str], exclusions: List
         
     # Convert script path to windows format for python.exe
     win_script_path = to_windows_path(str(scanner_script))
-    
+
+    # UNC paths (\\wsl.localhost\...) cause "UNC paths are not supported" in Windows Python.
+    # Run from WSL instead when script would be UNC.
+    use_wsl = win_script_path.startswith("\\\\")
+
     try:
-        # Construct command: cmd.exe /c python <script>
-        # We assume 'python' is in the Windows PATH.
-        cmd = ["cmd.exe", "/c", "python", win_script_path]
-        
-        logging.info(f"Invoking Windows scanner: {cmd}")
+        if use_wsl:
+            # Run scanner in WSL with Linux paths - avoids UNC path issues
+            cmd = ["python3", str(scanner_script)]
+            config = {"directories": directories, "extensions": extensions, "exclusions": exclusions}
+            logging.info("Invoking scanner via WSL (project in WSL home; UNC paths not supported by Windows Python)")
+        else:
+            # Run Windows Python with drive-letter path
+            cmd = ["cmd.exe", "/c", "python", win_script_path]
+            config = {"directories": win_dirs, "extensions": extensions, "exclusions": exclusions}
+            logging.info(f"Invoking Windows scanner: {cmd}")
         
         process = subprocess.Popen(
             cmd,
@@ -85,64 +94,46 @@ def scan_windows(directories: List[str], extensions: List[str], exclusions: List
         )
         
         stdout, stderr = process.communicate(input=json.dumps(config))
-        
+
         if process.returncode != 0:
-            logging.error(f"Windows scanner failed (code {process.returncode}): {stderr}")
+            logging.error(f"Scanner failed (code {process.returncode}): {stderr}")
             return None
-            
-        if stderr:
-            logging.warning(f"Windows scanner stderr: {stderr}")
-            
+
+        if stderr and "UNC paths" not in stderr:
+            logging.warning(f"Scanner stderr: {stderr}")
+
         try:
             result = json.loads(stdout)
         except json.JSONDecodeError as e:
             logging.error(f"Failed to parse scanner output: {e}. Output start: {stdout[:100]}")
             return None
-            
+
         files = []
-        # Convert back
-        # We can optimize this by doing string replacement if we know the mapping
-        # /mnt/c/ -> C:\
-        # But wslpath is safer.
-        # However, calling wslpath for EVERY file is slow! 
-        # We should cache the mapping or do simple string manipulation if possible.
-        # Let's try to deduce the mount point mapping from the input directories.
-        
-        # Heuristic: C:\Users\foo -> /mnt/c/Users/foo
-        # We can implement a fast local converter based on the directory inputs.
-        
-        # Map: "C:\" -> "/mnt/c/"
-        # Let's pre-calculate mappings for the input directories
-        path_mappings = [] # List of (win_prefix, linux_prefix)
-        for i, win_dir in enumerate(win_dirs):
-            linux_dir = directories[i]
-            # Ensure trailing slashes for clean replacement
-            w_p = win_dir.rstrip("\\")
-            l_p = linux_dir.rstrip("/")
-            path_mappings.append((w_p, l_p))
-            
-        for item in result.get("files", []):
-            win_path = item["path"]
-            mtime = item["mtime"]
-            
-            linux_path_str = None
-            
-            # Fast mapping
-            for w_prefix, l_prefix in path_mappings:
-                if win_path.startswith(w_prefix):
-                    # Replace prefix
-                    # C:\Users\foo\file.txt -> /mnt/c/Users/foo/file.txt
-                    # Suffix is \file.txt
-                    suffix = win_path[len(w_prefix):]
-                    suffix = suffix.replace("\\", "/")
-                    linux_path_str = l_prefix + suffix
-                    break
-            
-            if not linux_path_str:
-                # Fallback to slow wslpath if prefix not found (unlikely if scanner obeyed dirs)
-                linux_path_str = to_linux_path(win_path)
-                
-            files.append((Path(linux_path_str), mtime))
+        if use_wsl:
+            # Paths are already Linux format
+            for item in result.get("files", []):
+                files.append((Path(item["path"]), item["mtime"]))
+        else:
+            # Convert Windows paths back to Linux
+            path_mappings = []
+            for i, win_dir in enumerate(win_dirs):
+                linux_dir = directories[i]
+                w_p = win_dir.rstrip("\\")
+                l_p = linux_dir.rstrip("/")
+                path_mappings.append((w_p, l_p))
+
+            for item in result.get("files", []):
+                win_path = item["path"]
+                mtime = item["mtime"]
+                linux_path_str = None
+                for w_prefix, l_prefix in path_mappings:
+                    if win_path.startswith(w_prefix):
+                        suffix = win_path[len(w_prefix):].replace("\\", "/")
+                        linux_path_str = l_prefix + suffix
+                        break
+                if not linux_path_str:
+                    linux_path_str = to_linux_path(win_path)
+                files.append((Path(linux_path_str), mtime))
             
         logging.info(f"Windows scanner returned {len(files)} files in {result.get('duration', 0):.2f}s")
         return files

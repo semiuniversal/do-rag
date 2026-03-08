@@ -3,7 +3,7 @@ import hashlib
 import time
 import os
 from pathlib import Path
-from pypdf import PdfReader
+import fitz
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from llm_backend import get_embeddings
@@ -14,14 +14,12 @@ TARGET_FILE = Path("/mnt/c/Users/wtrem/Downloads/2022-Return.pdf")
 async def main():
     print(f"🚀 Force indexing: {TARGET_FILE}")
     
-    # 1. Read
+    # 1. Read (use indexer for consistency, or fitz for PDF)
     content = ""
     try:
-        reader = PdfReader(TARGET_FILE)
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                content += text + "\n"
+        with fitz.open(TARGET_FILE) as doc:
+            parts = [page.get_text(sort=True) for page in doc if page.get_text(sort=True)]
+            content = "\n\n".join(parts)
         print(f"✅ Read {len(content)} chars.")
     except Exception as e:
         print(f"❌ Read failed: {e}")

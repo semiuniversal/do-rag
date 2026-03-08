@@ -65,6 +65,25 @@
     their contents) will be ignored.
 </p>
 
+<h3>Indexing (Embedding)</h3>
+<div style="display: flex; gap: 2rem; flex-wrap: wrap;">
+    <div>
+        <label>Batch Size</label>
+        <input type="number" id="indexing_batch_size" min="1" max="20" style="width: 5rem;" title="Chunks per embedding request. Lower = less load, fewer 500/EOF errors.">
+        <small style="opacity: 0.7; display: block;">Default 5. App auto-reduces on failures.</small>
+    </div>
+    <div>
+        <label>Delay (seconds)</label>
+        <input type="number" id="indexing_delay" min="0" max="10" step="0.1" style="width: 5rem;" title="Pause between embedding batches. App auto-increases on failures.">
+        <small style="opacity: 0.7; display: block;">Default 0.3. App auto-increases on 500/EOF.</small>
+    </div>
+    <div>
+        <label>Max File Chars</label>
+        <input type="number" id="indexing_max_file_chars" min="10000" max="10000000" step="10000" style="width: 5rem;" title="Truncate files larger than this. Prevents huge files from blocking indexing.">
+        <small style="opacity: 0.7; display: block;">Default 500000 (500KB). Larger files are truncated.</small>
+    </div>
+</div>
+
 <div style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem;">
     <button type="submit">Save Changes</button>
     <span id="save-msg" style="margin-left: 1rem; opacity: 0; transition: opacity 0.5s;">Saved!</span>
@@ -114,6 +133,9 @@
 
         document.getElementById('ollama_url').value = data.OLLAMA_BASE_URL || "";
         document.getElementById('optimize_windows').checked = data.optimize_for_windows || false;
+        document.getElementById('indexing_batch_size').value = data.INDEXING_BATCH_SIZE ?? 5;
+        document.getElementById('indexing_delay').value = data.INDEXING_DELAY ?? 0.3;
+        document.getElementById('indexing_max_file_chars').value = data.INDEXING_MAX_FILE_CHARS ?? 500000;
         document.getElementById('extensions').value = (data.SUPPORTED_EXTENSIONS || []).join(", ");
         document.getElementById('ignored_dirs').value = (data.IGNORED_DIRECTORIES || []).join(", ");
 
@@ -349,6 +371,12 @@
 
         currentConfig.OLLAMA_BASE_URL = document.getElementById('ollama_url').value;
         currentConfig.optimize_for_windows = document.getElementById('optimize_windows').checked;
+        const batchSize = parseInt(document.getElementById('indexing_batch_size').value, 10);
+        const delay = parseFloat(document.getElementById('indexing_delay').value);
+        const maxFileChars = parseInt(document.getElementById('indexing_max_file_chars').value, 10);
+        if (!isNaN(batchSize) && batchSize >= 1) currentConfig.INDEXING_BATCH_SIZE = batchSize;
+        if (!isNaN(delay) && delay >= 0) currentConfig.INDEXING_DELAY = delay;
+        if (!isNaN(maxFileChars) && maxFileChars >= 10000) currentConfig.INDEXING_MAX_FILE_CHARS = maxFileChars;
 
         const exts = document.getElementById('extensions').value.split(',').map(s => s.trim().replace(/^\./, "")).filter(s => s).map(s => "." + s);
         currentConfig.SUPPORTED_EXTENSIONS = exts;

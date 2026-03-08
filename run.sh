@@ -24,6 +24,10 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
+# Stop any running stack first (clean slate; aborts indexing if running)
+./stop.sh > /dev/null 2>&1
+sleep 2
+
 echo "=== Starting do-rag Services ==="
 
 # 1. Start Ollama (Force Restart to ensure port binding)
@@ -58,6 +62,8 @@ sleep 1
 
 # 5. Start TTS (Piper voices for Open WebUI)
 echo "[5/7] Starting TTS (openedai-speech)..."
+fuser -k 8001/tcp 2>/dev/null || true
+sleep 1
 ./run_tts.sh start
 
 # 6. Start Admin Portal
@@ -84,31 +90,33 @@ echo "Access Admin Portal at:"
 echo "  http://localhost:5001"
 echo "================================"
 
-# Optional: Import Local File Expert model preset (uses admin credentials, no API key needed)
+# Optional: Import Local File Expert model preset (runs in background so run.sh doesn't block)
 if [ -n "$OPENWEBUI_ADMIN_PASSWORD" ]; then
-  echo ""
-  echo "Importing Local File Expert model preset..."
-  ADMIN_EMAIL="${OPENWEBUI_ADMIN_EMAIL:-admin@local}"
-  for i in $(seq 1 60); do
-    if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
-      TOKEN=$(curl -sf -X POST http://localhost:3000/api/v1/auths/signin \
-        -H "Content-Type: application/json" \
-        -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$OPENWEBUI_ADMIN_PASSWORD\"}" 2>/dev/null | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token',d.get('access_token','')))" 2>/dev/null)
-      if [ -n "$TOKEN" ]; then
-        if curl -sf -X POST http://localhost:3000/api/v1/models/import \
-          -H "Authorization: Bearer $TOKEN" \
+  (
+    echo "Importing Local File Expert model preset (background)..."
+    ADMIN_EMAIL="${OPENWEBUI_ADMIN_EMAIL:-admin@local}"
+    for i in $(seq 1 30); do
+      if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+        TOKEN=$(curl -sf -X POST http://localhost:3000/api/v1/auths/signin \
           -H "Content-Type: application/json" \
-          -d "@$SCRIPT_DIR/open_webui/local-file-expert.json" > /dev/null 2>&1; then
-          echo "  Local File Expert model imported."
+          -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$OPENWEBUI_ADMIN_PASSWORD\"}" 2>/dev/null | \
+          python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token',d.get('access_token','')))" 2>/dev/null)
+        if [ -n "$TOKEN" ]; then
+          if curl -sf -X POST http://localhost:3000/api/v1/models/import \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "@$SCRIPT_DIR/open_webui/local-file-expert.json" > /dev/null 2>&1; then
+            echo "  Local File Expert model imported."
+          else
+            echo "  Import failed (model may already exist)."
+          fi
         else
-          echo "  Import failed (model may already exist)."
+          echo "  Import skipped (login failed)."
         fi
-      else
-        echo "  Import skipped (login failed; admin may already exist with different password)."
+        exit 0
       fi
-      break
-    fi
-    sleep 2
-  done
+      sleep 2
+    done
+    echo "  Import skipped (Open WebUI not ready within 60s)."
+  ) &
 fi

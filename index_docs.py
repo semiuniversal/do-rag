@@ -15,10 +15,10 @@ logging_config.setup_logging()
 from indexer import IndexingJob
 
 
-async def run_with_progress(reset: bool):
+async def run_with_progress(reset: bool, errors_only: bool = False):
     """Run indexing with periodic progress output."""
     job = IndexingJob()
-    task = asyncio.create_task(job.start(reset=reset))
+    task = asyncio.create_task(job.start(reset=reset, errors_only=errors_only))
 
     # Poll for progress while the job runs
     while not task.done():
@@ -34,6 +34,7 @@ async def run_with_progress(reset: bool):
 def main():
     parser = argparse.ArgumentParser(description="Index local documents for RAG")
     parser.add_argument("--reset", action="store_true", help="Reset index before indexing")
+    parser.add_argument("--errors-only", action="store_true", help="Re-index only files that had errors in the last run")
     parser.add_argument("--force", action="store_true", help="Skip confirmation for --reset")
     args = parser.parse_args()
 
@@ -47,7 +48,7 @@ def main():
             sys.exit(0)
 
     start = time.time()
-    asyncio.run(run_with_progress(reset=args.reset))
+    asyncio.run(run_with_progress(reset=args.reset, errors_only=args.errors_only))
     elapsed = time.time() - start
     logging.info(f"Total time: {elapsed:.1f}s")
 

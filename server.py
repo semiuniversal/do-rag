@@ -421,24 +421,58 @@ Question: {question}
 Answer:"""
         prompt = ChatPromptTemplate.from_template(template)
         
+        # Retrieve docs first; if empty, don't invoke LLM (avoids guessing from filename)
+        docs = vectorstore.similarity_search(query, k=5)
+        context = "\n\n".join([d.page_content for d in docs]).strip()
+        if not context:
+            return (
+                "I couldn't find any indexed content for that document. "
+                "It may not have been indexed yet, failed during indexing, or the question doesn't match the content. "
+                "Check the Admin Portal at http://localhost:5001 for indexing status and errors."
+            )
+
         # Define Chain
         def format_docs(docs):
             return "\n\n".join([d.page_content for d in docs])
-            
+
         chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            {"context": format_docs(docs), "question": RunnablePassthrough()}
             | prompt
             | llm
             | StrOutputParser()
         )
-        
+
         # Execute Chain
         response = chain.invoke(query)
+
+        # Append source file links (unique paths from retrieved docs)
+        sources = list({d.metadata.get("source", "") for d in docs if d.metadata.get("source")})
+        if sources:
+            lines = ["\n\n---\n**Sources:**"]
+            for src in sorted(sources):
+                # WSL path -> Windows file:// URL for clickability
+                file_url = _path_to_file_url(src)
+                lines.append(f"- [{src}]({file_url})" if file_url else f"- {src}")
+            response += "\n".join(lines)
         return response
 
     except Exception as e:
         logging.error(f"Ask failed: {e}")
         return f"Error generating answer: {str(e)}"
+
+
+def _path_to_file_url(path: str) -> str:
+    """Convert a file path to a file:// URL. Handles WSL /mnt/c/ -> C:/."""
+    from urllib.parse import quote
+    if not path or not path.startswith("/"):
+        return ""
+    # WSL: /mnt/c/Users/... -> file:///C:/Users/...
+    if path.startswith("/mnt/") and len(path) > 5:
+        drive = path[5]  # e.g. 'c'
+        rest = path[6:].replace("\\", "/")
+        # Quote path for URLs (spaces, etc.)
+        return f"file:///{drive.upper()}:/{quote(rest, safe='/')}"
+    return f"file://{quote(path, safe='/')}"
 
 if __name__ == "__main__":
     import sys

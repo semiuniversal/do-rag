@@ -10,12 +10,12 @@
     <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1rem;">
         <div style="display: flex; gap: 0.5rem; align-items: center;">
             <label>Level:</label>
-            <select id="filter-level">
+            <select id="filter-level" title="Shows selected level and higher (e.g. WARNING = WARNING + ERROR)">
                 <option value="">All</option>
-                <option value="ERROR">ERROR</option>
-                <option value="WARNING">WARNING</option>
-                <option value="INFO">INFO</option>
-                <option value="DEBUG">DEBUG</option>
+                <option value="ERROR">ERROR only</option>
+                <option value="WARNING">WARNING+</option>
+                <option value="INFO">INFO+</option>
+                <option value="DEBUG">DEBUG+</option>
             </select>
         </div>
         <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -128,7 +128,7 @@
             if (res.ok) {
                 const cfg = await res.json();
                 const inp = document.getElementById('max-log-size');
-                if (inp) inp.value = cfg.LOG_MAX_SIZE_KB ?? 1024;
+                if (inp) inp.value = cfg.LOG_MAX_SIZE_KB ?? 8192;
             }
         } catch (e) {
             console.error('Failed to load config', e);

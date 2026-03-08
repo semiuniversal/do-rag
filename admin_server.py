@@ -5,9 +5,11 @@ import threading
 import asyncio
 import subprocess
 from pathlib import Path
+from typing import Optional
 from flask import Flask, render_template, request, jsonify, send_from_directory
 import config
 import logging_config
+import settings
 
 logging_config.setup_logging()
 
@@ -18,32 +20,31 @@ app = Flask(__name__)
 # --- Indexer Integration ---
 indexer_thread = None
 
-def run_indexer_job(reset: bool = False):
+def run_indexer_job(reset: bool = False, errors_only: bool = False):
     """Runs the indexing job in a separate thread with its own event loop."""
     job = indexer.get_current_job()
     try:
-        asyncio.run(job.start(reset=reset))
+        asyncio.run(job.start(reset=reset, errors_only=errors_only))
     except Exception as e:
         logging.error(f"Indexer thread failed: {e}")
 
 def get_dirty_status():
-    """Check if settings have changed since last index."""
+    """True if indexing-relevant config (directories, extensions, exclusions) changed since last index."""
     try:
-        settings_path = Path("settings.json")
-        state_path = Path("indexing_state.json")
-        
-        if not settings_path.exists():
-            return False
-            
-        if not state_path.exists():
-            # If we have settings but no state, we definitely need to index
-            return True
-            
-        # If settings were modified AFTER the last index state save
-        if settings_path.stat().st_mtime > state_path.stat().st_mtime:
-            return True
-            
-        return False
+        snapshot = indexer._load_index_config_snapshot()
+        if not snapshot:
+            return False  # No prior index; nothing to compare
+
+        current = settings.load_settings()
+        cur_dirs = sorted(current.get("directories") or current.get("DOCUMENT_DIRECTORIES") or [])
+        cur_exts = sorted(current.get("extensions") or current.get("SUPPORTED_EXTENSIONS") or [])
+        cur_excl = sorted(current.get("exclusions") or current.get("IGNORED_DIRECTORIES") or [])
+
+        snap_dirs = sorted(snapshot.get("directories", []))
+        snap_exts = sorted(snapshot.get("extensions", []))
+        snap_excl = sorted(snapshot.get("exclusions", []))
+
+        return cur_dirs != snap_dirs or cur_exts != snap_exts or cur_excl != snap_excl
     except Exception:
         return False
 
@@ -64,13 +65,28 @@ def logs_page():
 
 # --- API ---
 
+def _check_webui_healthy() -> bool:
+    """Check if Open WebUI is responding to health endpoint."""
+    try:
+        import urllib.request
+        url = f"{config.WEBUI_URL.rstrip('/')}/health"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 @app.route("/api/status")
 def api_status():
     # Read indexing state
     state_file = Path("indexing_state.json")
     total_files = 0
     indexed_files = []
-    
+
+    # Load persisted error files (survives restarts)
+    error_paths = set(indexer._load_error_files())
+
     if state_file.exists():
         try:
             with open(state_file, "r") as f:
@@ -81,7 +97,8 @@ def api_status():
                     indexed_files.append({
                         "path": path,
                         "mtime": data.get("mtime"),
-                        "chunks": len(data.get("chunk_ids", []))
+                        "chunks": len(data.get("chunk_ids", [])),
+                        "error": path in error_paths,
                     })
         except Exception as e:
             logging.error(f"Error reading state: {e}")
@@ -93,6 +110,7 @@ def api_status():
         "total_files": total_files,
         "indexed_files": indexed_files,
         "indexer_running": indexer.get_current_job().status in ("preparing", "scanning", "indexing"),
+        "webui_healthy": _check_webui_healthy(),
     })
 
 @app.route("/api/config", methods=["GET", "POST"])
@@ -186,6 +204,27 @@ def api_models():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/webui/restart", methods=["POST"])
+def api_webui_restart():
+    """Restart Open WebUI container only (for recovery when unhealthy)."""
+    project_root = Path(__file__).parent.resolve()
+    run_webui = project_root / "run_webui.sh"
+    if not run_webui.exists():
+        return jsonify({"error": "run_webui.sh not found"}), 404
+    try:
+        subprocess.Popen(
+            ["/bin/bash", str(run_webui)],
+            cwd=str(project_root),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return jsonify({"status": "restart_initiated", "message": "Open WebUI restart started. The button will enable when it's ready (usually 1–2 minutes)."})
+    except Exception as e:
+        logging.error(f"Failed to start WebUI restart: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/restart", methods=["POST"])
 def api_restart():
     """Run run.sh to restart all services (Ollama, Qdrant, MCP, Admin Portal, WebUI)."""
@@ -225,6 +264,20 @@ def api_pull_model():
 
 # --- Indexer APIs ---
 
+# Log level severity (higher = more severe). Used for "level and above" filtering.
+_LEVEL_SEVERITY = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3}
+
+
+def _level_from_line(line: str) -> Optional[str]:
+    """Extract log level from a line. Returns None if not parseable."""
+    parts = line.split(" | ", 3)
+    if len(parts) >= 2:
+        level = parts[1].strip().upper()
+        if level in _LEVEL_SEVERITY:
+            return level
+    return None
+
+
 def _subsystem_from_line(line: str) -> str:
     """Extract or infer subsystem from a log line. Supports old (4-field) and new (5-field) format."""
     parts = line.split(" | ", 4)  # max 5 parts: ts, level, [subsystem], name, message
@@ -253,7 +306,13 @@ def _read_log_lines(log_path: Path, tail: int = None, offset: int = 0, limit: in
         all_lines = f.readlines()
 
     if level_filter:
-        all_lines = [l for l in all_lines if f"| {level_filter}" in l or f"| {level_filter} " in l]
+        min_sev = _LEVEL_SEVERITY.get(level_filter.upper(), 0)
+        def level_passes(line: str) -> bool:
+            lev = _level_from_line(line)
+            if lev is None:
+                return True  # Include unparseable lines when filtering
+            return _LEVEL_SEVERITY.get(lev, 0) >= min_sev
+        all_lines = [l for l in all_lines if level_passes(l)]
     if subsystem_filter:
         all_lines = [l for l in all_lines if _subsystem_from_line(l) == subsystem_filter]
     if search:
@@ -336,13 +395,19 @@ def api_indexer_start():
         return jsonify({"error": "Indexing already in progress"}), 400
 
     reset = False
+    errors_only = False
     if request.json:
         reset = request.json.get("reset", False)
+        errors_only = request.json.get("errors_only", False)
 
-    indexer_thread = threading.Thread(target=run_indexer_job, args=(reset,), daemon=True)
+    indexer_thread = threading.Thread(
+        target=run_indexer_job,
+        args=(reset, errors_only),
+        daemon=True
+    )
     indexer_thread.start()
 
-    return jsonify({"status": "started", "reset": reset})
+    return jsonify({"status": "started", "reset": reset, "errors_only": errors_only})
 
 @app.route("/api/indexer/stop", methods=["POST"])
 def api_indexer_stop():
@@ -350,5 +415,75 @@ def api_indexer_stop():
     job.cancel()
     return jsonify({"status": "stopping"})
 
+
+@app.route("/api/indexer/reindex-file", methods=["POST"])
+def api_indexer_reindex_file():
+    """Re-index a single file by path."""
+    data = request.json or {}
+    path = data.get("path") or data.get("file_path")
+    if not path or not isinstance(path, str):
+        return jsonify({"error": "Missing or invalid 'path'"}), 400
+    path = path.strip()
+    if not path:
+        return jsonify({"error": "Path cannot be empty"}), 400
+    success, message = indexer.index_single_file(path)
+    if success:
+        return jsonify({"status": "ok", "message": message})
+    return jsonify({"error": message}), 400
+
+
+def _wsl_path_to_windows(path: str) -> str:
+    """Convert WSL path (/mnt/c/...) to Windows path (C:\\...)."""
+    path = path.replace("\\", "/")
+    if path.startswith("/mnt/") and len(path) > 5:
+        drive = path[5].upper()
+        rest = path[6:].replace("/", "\\")
+        return f"{drive}:\\{rest}"
+    return path.replace("/", "\\")
+
+
+def _is_path_allowed(path: str) -> bool:
+    """Ensure path is under a configured document directory (security)."""
+    try:
+        resolved = Path(path).resolve()
+        s = settings.load_settings()
+        dirs = s.get("directories") or s.get("DOCUMENT_DIRECTORIES") or []
+        for d in dirs:
+            try:
+                base = Path(d).resolve()
+                if str(resolved).startswith(str(base)) or resolved == base:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+    except (OSError, ValueError):
+        return False
+
+
+@app.route("/api/open-file")
+def api_open_file():
+    """Open a file in Windows Explorer (WSL interop). Converts /mnt/c/... to C:\\... and runs explorer.exe /select."""
+    path = request.args.get("path", "").strip()
+    if not path:
+        return jsonify({"error": "Missing path"}), 400
+    if not _is_path_allowed(path):
+        return jsonify({"error": "Path not under configured directories"}), 403
+    if not Path(path).exists() or not Path(path).is_file():
+        return jsonify({"error": "File not found"}), 404
+    win_path = _wsl_path_to_windows(path)
+    try:
+        subprocess.Popen(
+            ["explorer.exe", f'/select,"{win_path}"'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return jsonify({"status": "ok", "message": "Opening in Explorer"})
+    except Exception as e:
+        logging.warning(f"Failed to open file: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    # use_reloader=False: reloader passes socket FDs to child, which fails under nohup/background
+    # (run.sh restarts admin via nohup; reloader causes OSError: [Errno 9] Bad file descriptor)
+    app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)

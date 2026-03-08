@@ -25,10 +25,10 @@ def _get_max_log_bytes() -> int:
     """Return max log size in bytes (0 = no limit)."""
     try:
         import config
-        kb = config.load_settings().get("LOG_MAX_SIZE_KB", 1024)
+        kb = config.load_settings().get("LOG_MAX_SIZE_KB", 8192)
         return max(0, int(kb)) * 1024
     except Exception:
-        return 1024 * 1024  # 1 MB fallback
+        return 8192 * 1024  # 8 MB fallback
 
 
 def _truncate_log_if_needed(log_path: Path, max_bytes: int, handler=None) -> bool:

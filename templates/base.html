@@ -142,9 +142,23 @@
         // Simple helper to fetch JSON
         async function api(url, method = "GET", body = null) {
             const opts = { method, headers: { 'Content-Type': 'application/json' } };
-            if (body) opts.body = JSON.stringify(body);
+            if (body !== null && body !== undefined) opts.body = JSON.stringify(body);
             const res = await fetch(url, opts);
-            return res.json();
+            const text = await res.text();
+            let data;
+            try {
+                data = text ? JSON.parse(text) : {};
+            } catch (_) {
+                throw new Error(res.ok
+                    ? 'Server returned non-JSON'
+                    : `Request failed (${res.status}): ${text.slice(0, 150).replace(/\s+/g, ' ')}`);
+            }
+            if (!res.ok) {
+                const err = new Error(data.error || data.message || `Request failed (${res.status})`);
+                err.data = data;
+                throw err;
+            }
+            return data;
         }
     </script>
     {% block scripts %}{% endblock %}

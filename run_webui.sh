@@ -24,7 +24,11 @@ TTS_URL="http://${HOST_ALIAS}:8001/v1"
 WEBUI_ADMIN_EMAIL="${OPENWEBUI_ADMIN_EMAIL:-admin@local}"
 WEBUI_ADMIN_PASSWORD="${OPENWEBUI_ADMIN_PASSWORD:-}"
 
+$CONTAINER_CMD stop open-webui 2>/dev/null || true
 $CONTAINER_CMD rm -f open-webui 2>/dev/null || true
+# Release port 3000 (rootlessport may hold it briefly after container removal)
+fuser -k 3000/tcp 2>/dev/null || true
+sleep 2
 $CONTAINER_CMD run -d -p 3000:8080 \
   -e OLLAMA_BASE_URL=http://${HOST_ALIAS}:11434 \
   -e WEBUI_SECRET_KEY=do-rag-secret-key-2026-long-enough-now \
@@ -41,3 +45,15 @@ $CONTAINER_CMD run -d -p 3000:8080 \
   --name open-webui \
   --add-host=${HOST_ALIAS}:${HOST_IP} \
   ghcr.io/open-webui/open-webui:main
+
+echo -n "Waiting for Open WebUI to be ready..."
+for i in $(seq 1 90); do
+  if curl -sf --max-time 5 http://localhost:3000/health > /dev/null 2>&1; then
+    echo " ready!"
+    exit 0
+  fi
+  echo -n "."
+  sleep 2
+done
+echo " timeout. Check: $CONTAINER_CMD logs open-webui"
+exit 1

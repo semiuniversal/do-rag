@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 .env
 indexing_state.json
+indexing_errors.json
+index_config_snapshot.json
 settings.json
 config.py
 
