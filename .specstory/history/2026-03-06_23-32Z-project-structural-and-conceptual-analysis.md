@@ -15526,6 +15526,190 @@ I'm checking if the scanner uses `os.getcwd()` or `Path.resolve()` for path reso
 
 ---
 
+<details>
+            <summary>Searched web "undefined" • **1** results</summary>
+        
+| Title | URL |
+|-------|-----|
+| Web search results for query: "UNC paths are not supported" "Defaulting to Windows" Python | undefined |
+
+</details>
+
+---
+
+<think><details><summary>Thought Process</summary>**Investigating pipenv**
+
+I'm investigating whether the pipenv error originates from pipenv or Python when handling UNC paths. I'm exploring whether to run the scanner directly on Windows or through WSL, since the Windows version needs to handle Windows paths efficiently. 
+
+**Optimizing WSL integration**
+
+I'm weighing options for running the scanner in WSL, considering copying the script to Windows temp dir to avoid UNC paths. I'm running the scanner from a Windows-accessible path using cmd.exe to avoid UNC path issues. I'm using `to_windows_path` to convert the project root to a Windows path and run the scanner from a drive letter path instead of UNC. The project path in WSL home still resolves to a UNC path, so I can't avoid UNC paths when the project is located in WSL's native filesystem. I'm using WSL to run the scanner script instead of converting paths to UNC, which avoids the Windows path issue. I can run the scanner in WSL by passing /mnt/c/ paths instead of Windows paths, eliminating the need for Windows-specific scanner logic. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Handling UNC paths**
+
+I'm investigating how to properly run the scanner from WSL to avoid UNC path issues. 
+
+**Running scanner in WSL**
+
+I'll run the scanner in WSL using Linux paths like `/mnt/c/Users/...` instead of UNC paths. I'll switch to running the scanner via WSL when the script path is a UNC path, using `python3` with Linux paths. </details></think>
+
+---
+
+
+Checking where the message originates and adding a workaround:
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+Running the scanner from WSL when the script path is a UNC path (e.g. `\\wsl.localhost\Ubuntu\...`) to avoid Python's UNC-path limitations.
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Adjusting process execution**
+
+I'm updating the process execution to use WSL's Python when running in WSL environment. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+The UNC path warning comes from Windows Python when the script path is `\\wsl.localhost\Ubuntu\...` (a UNC path). Some Python operations on Windows don’t support UNC paths and emit that message.
+
+**Change made:** When the project lives under WSL (so the script path would be UNC), the bridge now runs the scanner with WSL’s Python instead of Windows Python. That avoids UNC paths entirely.
+
+- **Before:** `cmd.exe /c python \\wsl.localhost\...\scanner.py` → UNC path → warning
+- **After:** `python3 /home/tremw/Projects/do-rag/windows/scanner.py` → normal Linux path → no warning
+
+The scanner still runs and scans the same directories; it just runs under WSL instead of Windows when the project is in WSL.
+
+---
+
+_**User**_
+
+Once again, I'm hung up on a file. In this case, it's a Microsoft Excel document that is about 450K. 
+We need this thing to fail much faster. Is there a way to parse Excel documents and just produce a summary of their contents? In other words, the Excel file has five tabs with the following names. Each of them contains the following columns, and skip all the row data or something. I honestly don't know if the whole process is hung, or if it's just dutifully chugging along. 
+One thing I can tell you for sure is that the Llama embed requests are reporting 500s, but they're not being logged as errors in the logs. 
+
+---
+
+_**Assistant**_
+
+<think><details><summary>Thought Process</summary>**Handling excel file issues**
+
+I'm implementing early failure for large Excel files and adding summary generation for tabular data. I'm implementing early failure for large Excel files by adding summary generation for tabular data. I'm adding timeout and max file size checks for Excel parsing to fail faster. I'm adjusting logging levels for embedding failures and investigating Excel parsing performance with large files. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Updating logging levels**
+
+I'm changing embedding failure logs from warning to error level. </details></think>
+
+---
+
+
+
+
+
+---
+
+## Todo List
+
+- [-] Excel summary mode for large files (sheet names + headers only)
+- [ ] Log embedding 500/EOF as ERROR not WARNING
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
 
 
 ---
@@ -15548,9 +15732,349 @@ I'm checking if the scanner uses `os.getcwd()` or `Path.resolve()` for path reso
 
 
 
+
+
 ---
 
 
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Fixing excel summary**
+
+I'm checking how to handle empty sheets in Excel summaries by examining iter_rows behavior with empty sheets. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Fixing excel summary**
+
+I'm adjusting the Excel summary logic to properly handle the first row iteration. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Checking workbook loading**
+
+I'm investigating if load_workbook with read_only=True is slow for large files. </details></think>
+
+---
+
+
+
+
+
+---
+
+## Todo List
+
+- [x] Excel summary mode for large files (sheet names + headers only)
+- [x] Log embedding 500/EOF as ERROR not WARNING
+
+---
+
+
+
+---
+
+
+
+---
+
+
+Summary of changes:
+
+### 1. **Excel summary mode for large files**
+- For Excel files **> 150KB** (`INDEXING_MAX_XLSX_FULL_BYTES`), only sheet names and column headers (first row) are indexed.
+- Example output: `Sheet: Sales | Columns: Date | Revenue | Region`
+- Skips row data so large workbooks are processed quickly.
+- Your 450KB file will use this mode and should finish in seconds instead of hanging.
+
+### 2. **Embedding 500/EOF logged as ERROR**
+- `logging.warning` for embedding failures is now `logging.error`.
+- Logged messages:
+  - `Embedding 500/EOF (attempt 1/1), retrying in 1s: ...`
+  - `Embedding 500/EOF: batch of N items failed...`
+  - `Embedding 500/EOF backoff: delay=X.XXs, batch_size=N`
+- These will appear in the Logs view when filtering by ERROR.
+
+### 3. **Config**
+- `INDEXING_MAX_XLSX_FULL_BYTES` (default 150000) in `config.py`. You can override it in `settings.json` if needed.
+
+---
+
+_**User**_
+
+2026-03-08 01:58:15 | INFO     | system       | httpx | HTTP Request: POST http://localhost:11434/api/embed "HTTP/1.1 500 Internal Server Error"
+
+That should be an error, not an info. 
+
+---
+
+_**Assistant**_
+
+<think><details><summary>Thought Process</summary>**Configuring httpx logging**
+
+I'm adjusting httpx's log level to prevent INFO logging of 500 responses. I'm setting httpx's logger to WARNING level to suppress INFO logging of 500 responses. I'm adjusting httpx's logging to elevate 5xx responses to ERROR level for better visibility. 
+
+I'm setting httpx's logger level to WARNING to suppress INFO logs while preserving our own ERROR logging for 5xx responses. I'm adding a logging filter to upgrade httpx's 500 response logs to ERROR level. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+
+Added an `Http500ToErrorFilter` that upgrades httpx logs for 5xx responses from INFO to ERROR. Log lines like:
+
+```
+HTTP Request: POST http://localhost:11434/api/embed "HTTP/1.1 500 Internal Server Error"
+```
+
+will now appear as ERROR in the logs and in the Logs view when filtering by ERROR.
+
+---
+
+_**User**_
+
+When I restart the application after stopping indexing and then resume indexing once the application comes back up, it re-scans all the files. It should remember which files have been indexed. Right now, we're doing everything through log files, but I think we're going to need to have some sort of database index so that the volume itself contains a record not just of the embeddings but of the index of files themselves. I don't know that this is really needed; it's just that it doesn't seem like the log file or the JSON file that we're using is reliable. Maybe that's just things being kludgy. 
+
+---
+
+_**Assistant**_
+
+<think><details><summary>Thought Process</summary>**Persisting index state**
+
+I'm investigating why indexing state isn't persisting across restarts and how to fix the file tracking mechanism. 
+
+**Investigating index state**
+
+JSON state files might be getting cleared or not persisted correctly, causing full re-scans. 
+
+**Checking state persistence**
+
+The indexing_state.json file might not be persisting correctly across restarts, despite stop.sh not deleting it. I need to clarify the resume behavior - if indexing is cancelled, we should only process new/modified files on restart, not do a full scan. 
+
+I'm implementing state saving in the cancel path and verifying persistence across restarts. I'm investigating why state isn't persisting - the indexing_state.json file seems to be cleared or reset unexpectedly. I'm clarifying whether the scan reprocesses all files or only new/modified ones based on state comparison. I'm confirming that state is empty when the indexing state file is missing, corrupted, or not in the expected location. I confirmed that the indexer loads state from project_root/indexing_state.json. I confirmed that state is saved on cancellation before breaking out of the processing loop. 
+
+I realized that canceled files may have inconsistent state with orphaned chunk IDs in Qdrant. I need to verify the chunk deletion and addition order to prevent inconsistent state during cancellation. I found that stale state can cause inconsistencies when chunks are deleted from Qdrant but remain in state, leading to skipped file processing during resume. 
+
+The user complains about re-scanning all files, but the scan always runs; the key question is whether state persistence prevents file re-processing. 
+
+**Persisting scan state**
+
+I need to implement persistent storage for indexed file states to avoid re-scanning during restarts. I'm considering replacing JSON storage with SQLite for better reliability and atomicity of file index persistence. I'm implementing atomic writes for JSON by writing to a temp file then renaming to avoid corruption. The reset functionality clears the state file, which might explain why state appears to be cleared unexpectedly. I'm adding atomic JSON writes to prevent state corruption from partial writes. </details></think>
+
+---
+
+
+Checking how state is saved and loaded:
+
+
+---
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Checking state file paths**
+
+I found that the admin server uses a relative path while the indexer uses an absolute path for the state file, which could lead to them accessing different files. The state file paths resolve correctly to project_root/indexing_state.json for both admin server and indexer. The admin server uses a relative path for state files, which could cause issues if CWD changes. The admin server assumes CWD is project root when reading indexing_state.json, which may break if run from different directories. The indexer loads state in the same process as admin_server, so CWD assumptions are fine. I discovered that on reset or integrity check, state files are deleted when Qdrant is empty, which explains why indexing might restart. 
+
+**Fixing integrity check**
+
+I found the bug: integrity check deletes state when Qdrant is empty, causing indexing to restart. I'll modify the integrity check to preserve state when Qdrant is empty during normal restarts. 
+
+I'll preserve state during normal restarts by avoiding deletion when Qdrant is empty, instead re-adding chunks and letting deletions no-op. I'll avoid deleting state during file updates to prevent orphaned chunk IDs, instead processing all files fresh. I realized that restarting the process creates inconsistent state where chunk IDs exist in state but not in Qdrant, potentially causing files to be skipped during reindexing. The integrity check reveals inconsistency when Qdrant is empty but state exists, requiring either preserving Qdrant on restart or accepting re-indexing after full restart. The integrity check forces re-indexing when Qdrant is empty, but user may prefer Qdrant persistence across restarts. </details></think>
+
+---
+
+
+
+
+
+---
+
+
+
+---
+
+
+
+---
+
+<think><details><summary>Thought Process</summary>**Checking integrity**
+
+The integrity check triggers when a Qdrant collection exists but contains zero points, likely due to manual deletion or unexpected removal. The Qdrant collection exists in the named volume qdrant_data, not in the expected location. 
+
+**Implementing atomic writes**
+
+I'm implementing atomic JSON writes using temporary files and renames to ensure data integrity. I'm adding a log message to show 'Loaded indexing state: N files' when loading the state. I'm verifying that the indexing state file path resolves correctly relative to the admin server's working directory. </details></think>
+
+---
+
+_**User**_
+
+When I said earlier it should rescan the files, I still think that's true. It should simply compare them to the files that have already been indexed, and only if a new file has occurred should it be added to the list to index. 
+
+---
+
+_**Assistant**_
+
+<think><details><summary>Thought Process</summary>**Clarifying scan flow**
+
+I'm confirming the rescan behavior and ensuring we only index new files. I'm adjusting the indexing logic to only process new files, not modified ones. I'm re-reading the requirements to confirm whether modified files should trigger re-indexing. I think they mean only re-index files that are either new or have changed, not all modified files. The current logic correctly identifies new and modified files by checking state and mtime. The requirement might be to only process new files, not modified ones, which would change our current logic. 
+
+I'll assume the standard behavior of processing new and modified files, not just new ones. 
+
+**Comparing indexed files**
+
+I'm implementing logic to skip files with same mtime and already indexed status. I need to re-read the requirement more carefully to understand if we should exclude modified files and only add new ones. </details></think>
+
+---
+
+
+The current logic already does that:
+
+1. **Rescan** – Directories are always rescanned.
+2. **Compare** – Scanned files are compared to `indexing_state.json`.
+3. **Only add when needed** – A file is added to the processing list only if:
+   - it’s **new** (not in state), or
+   - it’s **modified** (in state but `mtime` changed).
+
+So unchanged files that are already indexed are skipped.
+
+```python
+if str_path not in state or state[str_path].get("mtime") != mtime:
+    files_to_process.append(file_path)
+```
+
+If you’re still seeing everything re-processed after a restart, the usual cause is the **integrity check**: when Qdrant is empty but state exists (e.g. after `run.sh` restarts Qdrant), the indexer deletes the state file and forces a full re-index. Qdrant uses a `qdrant_data` volume, so its data should persist across restarts; if the volume is cleared or recreated, the integrity check will wipe state and trigger a full re-index.
+
+If you want to change behavior (e.g. only index strictly new files and never re-index modified ones), say how you’d like it to work and we can adjust the logic.
 
 ---
 

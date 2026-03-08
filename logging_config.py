@@ -87,6 +87,18 @@ class SubsystemFilter(logging.Filter):
         return True
 
 
+class Http500ToErrorFilter(logging.Filter):
+    """Upgrade httpx logs for 5xx responses from INFO to ERROR."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "httpx" and record.levelno == logging.INFO:
+            combined = str(record.msg) + str(getattr(record, "args", ()))
+            if "500" in combined or "Internal Server Error" in combined:
+                record.levelno = logging.ERROR
+                record.levelname = "ERROR"
+        return True
+
+
 _configured = False
 
 
@@ -116,6 +128,7 @@ def setup_logging(
     file_handler.setFormatter(formatter)
     file_handler.setLevel(level)
     file_handler.addFilter(subsystem_filter)
+    file_handler.addFilter(Http500ToErrorFilter())
 
     # Root logger
     root = logging.getLogger()
@@ -130,6 +143,7 @@ def setup_logging(
         stderr_handler.setFormatter(formatter)
         stderr_handler.setLevel(level)
         stderr_handler.addFilter(subsystem_filter)
+        stderr_handler.addFilter(Http500ToErrorFilter())
         root.addHandler(stderr_handler)
 
     _configured = True
@@ -169,6 +183,7 @@ def clear_log_file() -> bool:
         new_handler.setFormatter(formatter)
         new_handler.setLevel(root.level)
         new_handler.addFilter(subsystem_filter)
+        new_handler.addFilter(Http500ToErrorFilter())
         root.addHandler(new_handler)
         return True
     except Exception:

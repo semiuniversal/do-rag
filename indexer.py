@@ -182,14 +182,30 @@ def _read_file_content(file_path: Path) -> str:
     # XLSX: openpyxl — sheet text (data_only=False avoids slow formula evaluation)
     if suffix == ".xlsx":
         try:
+            file_size = file_path.stat().st_size
+            max_full_bytes = getattr(config, "INDEXING_MAX_XLSX_FULL_BYTES", 150000)  # ~150KB
+            use_summary = file_size > max_full_bytes
+
             from openpyxl import load_workbook
             wb = load_workbook(file_path, read_only=True, data_only=False, keep_vba=False)
             parts = []
-            for sheet in wb.worksheets:
-                for row in sheet.iter_rows(values_only=True):
-                    row_text = " | ".join(str(c) for c in row if c is not None and str(c).strip())
-                    if row_text.strip():
-                        parts.append(row_text)
+            if use_summary:
+                # Large file: only sheet names + column headers (first row per sheet)
+                for sheet in wb.worksheets:
+                    try:
+                        first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+                        header_parts = [str(c).strip() for c in (first_row or ()) if c is not None and str(c).strip()]
+                        headers = " | ".join(header_parts) if header_parts else "(no headers)"
+                        parts.append(f"Sheet: {sheet.title} | Columns: {headers}")
+                    except (StopIteration, Exception):
+                        parts.append(f"Sheet: {sheet.title} | (could not read headers)")
+                logging.info(f"Excel {file_path.name} ({file_size//1024}KB): using summary mode (sheet names + headers only)")
+            else:
+                for sheet in wb.worksheets:
+                    for row in sheet.iter_rows(values_only=True):
+                        row_text = " | ".join(str(c) for c in row if c is not None and str(c).strip())
+                        if row_text.strip():
+                            parts.append(row_text)
             wb.close()
             return "\n\n".join(parts) if parts else ""
         except Exception as e:
@@ -807,7 +823,7 @@ class IndexingJob:
                         """Increase delay and decrease batch size on 500/EOF."""
                         effective_delay[0] = min(effective_delay[0] * 1.5, 5.0)
                         effective_batch_size[0] = max(1, effective_batch_size[0] / 2)
-                        logging.info(f"Adaptive backoff: delay={effective_delay[0]:.2f}s, batch_size={int(effective_batch_size[0])}")
+                        logging.error(f"Embedding 500/EOF backoff: delay={effective_delay[0]:.2f}s, batch_size={int(effective_batch_size[0])}")
 
                     def _maybe_circuit_break(orig_exc: Exception) -> None:
                         """After 3 consecutive EOF/500 failures, abort file to avoid grinding."""
@@ -863,7 +879,7 @@ class IndexingJob:
                                     max_retries = 1
                                     for attempt in range(max_retries):
                                         wait_time = 1 * (2 ** attempt)  # 1, 2 seconds
-                                        logging.warning(f"Single item embedding failed (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s: {e}")
+                                        logging.error(f"Embedding 500/EOF (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s: {e}")
                                         await asyncio.sleep(wait_time)
                                         try:
                                             t_embed_start = time.time()
@@ -906,7 +922,7 @@ class IndexingJob:
                                     raise e
                             else:
                                 # Batch > 1 failed -> Split and recurse (Divide and Conquer)
-                                logging.warning(f"Batch of {len(docs_subset)} items failed (chars={total_chars}). Splitting and retrying...")
+                                logging.error(f"Embedding 500/EOF: batch of {len(docs_subset)} items failed (chars={total_chars}). Splitting and retrying...")
                                 mid = len(docs_subset) // 2
                                 await _adaptive_embed(docs_subset[:mid], ids_subset[:mid], depth+1)
                                 await _adaptive_embed(docs_subset[mid:], ids_subset[mid:], depth+1)
